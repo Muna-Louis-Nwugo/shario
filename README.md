@@ -17,7 +17,7 @@ The Shario API accepts packets of 16 bytes:
    [4 bytes]     [2 bytes]  [1 byte]   [8 bytes]   [1 bytes]
 
 This is always the case. Standardization is necessary for compatability across environments. 
-# TODO: come up with standards for determining which file and which position in which file
+#### TODO: come up with standards for determining which file and which position in which file
 
 ### Shar 
 The shar is the core of shario. It is made up of three parts:

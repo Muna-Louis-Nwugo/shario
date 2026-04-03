@@ -18,3 +18,20 @@ The Shario API accepts packets of 16 bytes:
 
 This is always the case. Standardization is necessary for compatability across environments. 
 # TODO: come up with standards for determining which file and which position in which file
+
+### Shar 
+The shar is the core of shario. It is made up of three parts:
+1. The operation queue
+  - queues operations received over the network
+2. the operation buffer
+  - stores operation to be broadcast to collaborators
+3. the operation log
+   - save the last 50 operations made
+
+### terminal commands
+
+- shar make: Initializes a .shar/ directory in the current folder, generates a unique Session ID, and spawns the background daemon (shar). This establishes the local machine as the Host (Single Source of Truth).
+
+- shar join <session-id>:Connects a client to an active host on the local network. It triggers the Hydration process: the client receives a full-state snapshot of the codebase followed by the live binary diff stream.
+
+- shar terminate: Safely shuts down the background daemon, flushes any remaining 8KB buffers to the binary diffs.log, and removes the session.lock file.

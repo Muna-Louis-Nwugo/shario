@@ -4,3 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+thiserror = "1"
+# for command line interfaces
+# clap = {version = '4', features = ["cargo"]}
+
+[dev-dependencies]
+# more usable error handling / tests
+anyhow = "1"

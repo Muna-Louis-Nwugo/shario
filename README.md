@@ -11,10 +11,10 @@ Shario shall be initialized and managed in the terminal using the "shar" command
 The idea behind this is a socket core to which one can mount a plugin or tool for whichever IDE is their preferred. Shario does plan on implementing plugins for VSCode, Jetbrains, and Vim users, but feel free to build your own. As keys are typed into a users computer, the plugins inform shario of the change, and shario distributes that change to all other collaborators.
 
 ### Port 
-The Shario API accepts packets of 16 bytes:
+The Shario API accepts packets of 24 bytes:
 
-[UTF-8 keystroke][position][operation][timestamp][emmittter ID]  
-   [4 bytes]     [2 bytes]  [1 byte]   [8 bytes]   [1 bytes]
+[UTF-8 keystroke][position][operation][emmittter ID][timestamp]
+   [4 bytes]     [8 bytes]  [2 byte]    [2 bytes]   [8 bytes]
 
 This is always the case. Standardization is necessary for compatability across environments. 
 #### TODO: come up with standards for determining which file and which position in which file

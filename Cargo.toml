@@ -5,6 +5,8 @@ edition = "2024"
 
 [dependencies]
 thiserror = "1"
+# IO
+tokio = {version = "1.51.0", features = ["rt", "net", "fs", "io-util"]}
 # for command line interfaces
 # clap = {version = '4', features = ["cargo"]}
 

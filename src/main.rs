@@ -1,5 +1,8 @@
+#![allow(warnings)]
 mod shar;
 
+use shar::core;
+
 fn main() {
-    println!("Hello, world!");
+    let queue = core::queue::SharQueue::new();
 }

@@ -1,6 +1,6 @@
 use super::error::Error;
 use super::prelude::*;
 
-mod buffer;
-mod operation;
-mod queue;
+pub mod buffer;
+pub mod operation;
+pub mod queue;

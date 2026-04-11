@@ -6,14 +6,26 @@ use super::operation::Operation;
 use crate::shar::prelude::Error;
 
 pub struct Buffer {
-    buffer: BufWriter<IOResult<File>>,
+    buffer: File,
 }
 
 impl Buffer {
-    pub async fn new() -> Self {
-        Buffer {
-            buffer: BufWriter::new(File::create("/projects/shario_output/buffer.txt").await),
-        }
+    pub async fn new() {
+        /* Creates a new buffer*/
+        // TODO: WHEN THE TIME COMES, UPDATE THIS TO SOMEHOW TRANSMIT ACROSS A NETWORK
+        // make the buffer
+        let make_buffer = File::open("/projects/shario_output/buffer.txt").await;
+
+        let buffer_result = match make_buffer {
+            Ok(file) => {
+                Buffer { buffer: file };
+            }
+
+            // TODO: Come up with something else other than panicking
+            Err(error) => {
+                panic!("File failed to open")
+            }
+        };
     }
 }
 

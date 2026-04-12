@@ -33,15 +33,15 @@ impl Buffer {
 }
 
 pub trait FileWrite {
-    fn write(&mut self, operation: [u8; 14]);
+    async fn write(&mut self, operation: [u8; 14]);
 
     fn read(self) -> Result<Vec<u8>>;
 }
 
 impl FileWrite for Buffer {
-    fn write(&mut self, operation: [u8; 14]) {
+    async fn write(&mut self, operation: [u8; 14]) {
         // For now, just write to the file.
-        self.buffer.write(&operation);
+        self.buffer.write(&operation).await;
     }
 
     fn read(self) -> Result<Vec<u8>> {

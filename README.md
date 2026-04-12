@@ -13,7 +13,7 @@ The idea behind this is a socket core to which one can mount a plugin or tool fo
 ### Port 
 The Shario API accepts packets of 24 bytes:
 
-[UTF-8 keystroke][position][operation][emmittter ID][timestamp]
+[UTF-8 keystroke][position][operation][emmittter ID][timestamp]  
    [4 bytes]     [8 bytes]  [2 byte]    [2 bytes]   [8 bytes]
 
 This is always the case. Standardization is necessary for compatability across environments. 

@@ -7,22 +7,6 @@ pub struct Operation {
     operation_type: OperationType,
     position: i64,
 }
-
-pub enum OperationType {
-    /* represents types of operations that can be performed */
-    AddChar,
-    RemoveChar,
-}
-
-impl OperationType {
-    pub fn value(self) -> [u8; 2] {
-        match self {
-            OperationType::AddChar => [0u8, 1u8],
-            OperationType::RemoveChar => [1u8, 0u8],
-        }
-    }
-}
-
 impl Operation {
     pub fn new(character: Option<char>, operation_type: OperationType, position: i64) -> Self {
         Operation {
@@ -55,5 +39,19 @@ impl Operation {
             .chain(position_bytes);
 
         std::array::from_fn(|_| output.next().unwrap())
+    }
+}
+pub enum OperationType {
+    /* represents types of operations that can be performed */
+    AddChar,
+    RemoveChar,
+}
+
+impl OperationType {
+    pub fn value(self) -> [u8; 2] {
+        match self {
+            OperationType::AddChar => [0u8, 1u8],
+            OperationType::RemoveChar => [1u8, 0u8],
+        }
     }
 }

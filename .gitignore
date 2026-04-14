@@ -24,3 +24,7 @@ target
 # Added by cargo
 
 /target
+
+
+# Added by Muna
+write_buffer.txt

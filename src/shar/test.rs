@@ -11,7 +11,9 @@ mod file_io {
 
         match buff {
             Some(mut b) => {
-                b.write_gen(operation).await;
+                println!("file successfully created");
+                println!("calling write_gen");
+                b.write_general(operation).await;
             }
 
             None => {

@@ -1,6 +1,7 @@
 // general imports that will be used throughout the project
 
 pub use super::error::Error;
+pub use crate::shar::crdt;
 pub use tokio::io;
 
 // Result Alias

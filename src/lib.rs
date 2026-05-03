@@ -1,5 +1,5 @@
 #![allow(warnings)]
-mod shar;
+pub mod shar;
 
 use shar::core;
 

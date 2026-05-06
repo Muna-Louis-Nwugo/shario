@@ -13,13 +13,16 @@ pub type IOResult<T> = io::Result<T>;
 // wrapper tuple struct (newtype pattern)
 pub struct W<T>(pub T);
 
+// GLOBAL STRUCTS
+
 pub type CRDT = types::CRDT;
 
 pub type OperationType = types::OperationType;
 
 pub type Operation = types::Operation;
 
-pub const ANCHOR_BOUNDARY: usize = types::ANCHOR_BOUNDARY;
+// GLOBAL VARIABLES / PRIMITIVE TYPE ALIASES
+pub const ANCHOR_LENGTH: usize = types::ANCHOR_BOUNDARY;
 
 pub type ID_SIZE = types::ID_SIZE;
 

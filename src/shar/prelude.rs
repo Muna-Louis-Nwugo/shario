@@ -5,7 +5,7 @@ pub use crate::shar::types;
 pub use tokio::io;
 
 // Result Alias
-pub type Result<T> = core::result::Result<T, Error>;
+pub type Result<T> = std::result::Result<T, Error>;
 
 // IO Result alias
 pub type IOResult<T> = io::Result<T>;

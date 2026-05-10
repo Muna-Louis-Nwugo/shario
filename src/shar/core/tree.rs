@@ -61,7 +61,7 @@ impl Tree {
         let file_contents = std::fs::read_to_string(file_path);
         // ids. When a file is being created, the ids will just represent the order in which they
         // were added to the tree (AKA their position in the file)
-        let id: u8 = 0;
+        let mut id: u8 = 0;
 
         // the shar specification states that peer 0 is reserved for the char itself to add to the
         // tree as necessary
@@ -69,20 +69,26 @@ impl Tree {
 
         match (file_contents) {
             Ok(contents) => {
-                for (i, c) in contents.char_indices() { 
-                    id = i as u8;
+                for (i, c) in contents.char_indices() {
+                    id = (i % (ANCHOR_LENGTH)) as u8;
 
                     let anchor_id: u16 = id as u16 % ANCHOR_LENGTH as u16;
                     let parent_id = id - 1;
                     let val = c;
                     let id = id;
 
-                    let crdt =  CRDT::new(val, id, parent_id, anchor_id, peer_id);
+                    let crdt = CRDT::new(val, id, parent_id, anchor_id, peer_id);
                 }
-            },
+            }
 
-            Err(e) => return Err(Error::ReadFail("Something went wrong while trying to read file contents: {e}".to_string()));
+            Err(e) => {
+                return Err(Error::ReadFail(
+                    "Something went wrong while trying to read file contents: {e}".to_string(),
+                ));
+            }
         };
+
+        Ok(())
     }
 
     fn create_anchor(&mut self, crdt: &CRDT) {

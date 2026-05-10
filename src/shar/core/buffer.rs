@@ -4,8 +4,8 @@ use tokio::fs::File;
 // use tokio::io::{self, AsyncWriteExt, BufWriter};
 use tokio::io::{AsyncWriteExt, BufReader, BufWriter};
 
-use crate::shar::crdt::Operation;
 use crate::shar::prelude::Error;
+use crate::shar::types::Operation;
 
 pub struct Buffer {
     write_buffer: BufWriter<File>,

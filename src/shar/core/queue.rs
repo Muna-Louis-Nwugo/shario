@@ -1,4 +1,4 @@
-use crate::shar::crdt::Operation;
+use crate::shar::types::Operation;
 use std::collections::VecDeque;
 /* The Shar operation queue */
 

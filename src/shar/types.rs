@@ -42,7 +42,7 @@ pub struct CRDT {
     pub id: ID_SIZE,
     pub parent_id: ID_SIZE,
     pub anchor_id: ANCHOR_ID_SIZE,
-    peer_id: ID_SIZE,
+    pub peer_id: ID_SIZE,
 }
 
 impl CRDT {

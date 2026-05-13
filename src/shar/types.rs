@@ -109,7 +109,7 @@ pub struct Operation {
 }
 
 impl Operation {
-    pub fn new(crdt: CRDT, operation_type: OperationType, position: i64) -> Self {
+    pub fn new(crdt: CRDT, operation_type: OperationType) -> Self {
         Operation {
             crdt: crdt,
             operation_type: operation_type,
@@ -120,7 +120,7 @@ impl Operation {
     ///
     ///[crdt] [operation_type]
     pub fn to_bytes(self) -> [u8; 15] {
-        let mut send_character: [u8; 4] = [0, 0, 0, 0];
+        let send_character: [u8; 4] = [0, 0, 0, 0];
 
         let crdt = self.crdt.to_bytes();
 

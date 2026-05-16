@@ -8,4 +8,7 @@ pub enum Error {
 
     #[error("ReadFail: {0}")]
     ReadFail(String),
+
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
 }

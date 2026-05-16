@@ -1,6 +1,8 @@
 //! Contains character tree that manages local state
 use std::path::Path;
 
+use tokio::time::error;
+
 use crate::shar::error::Error;
 use crate::shar::prelude::*;
 use std::collections::HashMap;
@@ -18,7 +20,7 @@ struct SharFile {
 }
 
 impl SharFile {
-    pub fn new(file_path: String) -> Result<Self> {
+    pub fn new(file_path: &str) -> Result<Self> {
         let file = std::fs::read_to_string(file_path);
 
         match file {
@@ -112,13 +114,6 @@ impl SharFile {
         };
     }
 
-    pub fn add_directory(&mut self, file_path: String) {
-        // turn the string into a path
-        let file_path = Path::new(&file_path);
-
-        for entry in file_path {}
-    }
-
     fn create_anchor(&mut self, crdt: &CRDT) {
         let anchor_id = crdt.anchor_id;
         let parent_id = crdt.parent_id;
@@ -141,5 +136,38 @@ struct SharDirectory {
 }
 
 impl SharDirectory {
-    pub fn new(dir_path: String) {}
+    /// Doesn't yet support symlinks anywhere in the tree being initialized
+    pub fn new(dir_path: &str) -> Result<Self> {
+        let entries = std::fs::read_dir(dir_path);
+        let mut sub_dir_vector = Vec::new();
+        let mut sub_file_vector = Vec::new();
+
+        match entries {
+            Ok(entries) => {
+                // Recursively call new() on children. If the current entry is a file, create the
+                // file's CRDT tree
+
+                // if there even are any entries
+                for entry in entries {
+                    let entry = entry?;
+                    let entry_type = entry.file_type()?;
+                    // if it's a directory, recursively create a new SharDir
+                    if entry_type.is_dir() {
+                        sub_dir_vector.push(Self::new(entry.path().to_str().unwrap())?);
+                    } else if entry_type.is_file() {
+                        sub_file_vector.push(SharFile::new(entry.path().to_str().unwrap())?);
+                    }
+                }
+                Ok(SharDirectory {
+                    dir_path: String::from(dir_path),
+                    sub_dir: sub_dir_vector,
+                    sub_files: sub_file_vector,
+                })
+            }
+
+            Err(e) => Err(Error::ReadFail(
+                format!("Failed to read directory, try again: {e}").to_string(),
+            )),
+        }
+    }
 }

@@ -16,6 +16,7 @@ impl Buffer {
     pub async fn new() -> Option<Buffer> {
         /* Creates a new write_buffer*/
         // TODO: WHEN THE TIME COMES, UPDATE THIS TO SOMEHOW TRANSMIT ACROSS A NETWORK
+
         // make the write_buffer
         let make_write_buffer = File::create(io_info::file_location).await;
         // let make_read_buffer = File::open("projects/shario_output/write_buffer.txt").await;
@@ -24,7 +25,6 @@ impl Buffer {
             Ok(file) => {
                 return Some(Buffer {
                     write_buffer: BufWriter::new(file),
-                    // read_buffer: BufReader::new(),
                 });
             }
 

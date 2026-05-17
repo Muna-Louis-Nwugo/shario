@@ -1,4 +1,5 @@
 //! Contains character tree that manages local state
+use std::fmt;
 use std::path::Path;
 
 use tokio::time::error;
@@ -14,7 +15,7 @@ use std::path;
 pub type Anchor = HashMap<(ID_SIZE, ID_SIZE), (ID_SIZE, char)>;
 
 /// Represents a file in the shar
-struct SharFile {
+pub struct SharFile {
     file_path: String,
     tree: HashMap<ANCHOR_ID_SIZE, Anchor>,
 }
@@ -128,9 +129,31 @@ impl SharFile {
     }
 }
 
+impl fmt::Display for SharFile {
+    fn fmt(&self, f: &mut fmt::Formatter) -> std::result::Result<(), std::fmt::Error> {
+        // write_out the file path
+        write!(f, "{}", self.file_path)?;
+
+        let crdt_tree = self.tree.clone();
+
+        // print out the CRDTs
+        for anchor in crdt_tree.into_values() {
+            for crdt in anchor {
+                write!(
+                    f,
+                    "Peer_id: {}; parent_id: {}; id: {}; value: {}",
+                    crdt.0.0, crdt.0.1, crdt.1.0, crdt.1.1
+                )?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
 /// Rerpresents a directory in the shar
-struct SharDirectory {
-    dir_path: String,
+pub struct SharDirectory {
+    dir_name: String,
     sub_dir: Vec<SharDirectory>,
     sub_files: Vec<SharFile>,
 }
@@ -147,7 +170,9 @@ impl SharDirectory {
                 // Recursively call new() on children. If the current entry is a file, create the
                 // file's CRDT tree
 
-                // if there even are any entries
+                // NOTE: this uses to_str.unwrap which will crash on non UTF-8 characters
+                // TODO: allow this to be used on paths containing non-UTF8 characters. This is not
+                // a very high priority task, but it should be done to provide maximum flexibility
                 for entry in entries {
                     let entry = entry?;
                     let entry_type = entry.file_type()?;
@@ -159,7 +184,7 @@ impl SharDirectory {
                     }
                 }
                 Ok(SharDirectory {
-                    dir_path: String::from(dir_path),
+                    dir_name: String::from(dir_path),
                     sub_dir: sub_dir_vector,
                     sub_files: sub_file_vector,
                 })
@@ -169,5 +194,26 @@ impl SharDirectory {
                 format!("Failed to read directory, try again: {e}").to_string(),
             )),
         }
+    }
+}
+
+impl fmt::Display for SharDirectory {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // print the name of this directory
+        write!(f, "{}", self.dir_name)?;
+
+        // print the subfiles
+        let files = &self.sub_files;
+        for file in files {
+            file.fmt(f)?;
+        }
+
+        // print the sub_directories
+        let dirs = &self.sub_dir;
+        for dir in dirs {
+            dir.fmt(f)?;
+        }
+
+        Ok(())
     }
 }

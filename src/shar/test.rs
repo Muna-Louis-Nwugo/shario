@@ -28,10 +28,25 @@ mod file_io {
         file_write().await;
     }
 
-    async fn test_tree_creation() {
+    #[test]
+    fn test_tree_creation() {
+        print!("entered test_tree_creation \n");
         // initialize the tree using a test.txt file
         let test_tree = tree::SharDirectory::new("/home/muna/projects/shario/test_material");
 
-        print!(test_tree.to_string());
+        let tree_string: String;
+
+        match test_tree {
+            Ok(tree) => {
+                tree_string = tree.to_string();
+            }
+
+            Err(e) => {
+                print!("Something went wrong: {e}\n");
+                return;
+            }
+        }
+
+        print!("{}\n", tree_string);
     }
 }

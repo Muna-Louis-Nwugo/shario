@@ -40,7 +40,7 @@ impl SharFile {
 
             Err(e) => {
                 return Err(Error::ReadFail(
-                    format!("Something went wrong while trying to read file contents: {e}")
+                    format!("Something went wrong while trying to read file contents: \n {e} \n")
                         .to_string(),
                 ));
             }
@@ -74,7 +74,7 @@ impl SharFile {
 
             Err(e) => {
                 return Err(Error::ReadFail(
-                    format!("Something went wrong while trying to read file contents: {e}")
+                    format!("Something went wrong while trying to read file contents: \n {e} \n")
                         .to_string(),
                 ));
             }
@@ -132,7 +132,7 @@ impl SharFile {
 impl fmt::Display for SharFile {
     fn fmt(&self, f: &mut fmt::Formatter) -> std::result::Result<(), std::fmt::Error> {
         // write_out the file path
-        write!(f, "{}", self.file_path)?;
+        write!(f, "{}\n", self.file_path)?;
 
         let crdt_tree = self.tree.clone();
 
@@ -191,7 +191,7 @@ impl SharDirectory {
             }
 
             Err(e) => Err(Error::ReadFail(
-                format!("Failed to read directory, try again: {e}").to_string(),
+                format!("Failed to read directory, try again: \n {e} \n").to_string(),
             )),
         }
     }
@@ -200,7 +200,7 @@ impl SharDirectory {
 impl fmt::Display for SharDirectory {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // print the name of this directory
-        write!(f, "{}", self.dir_name)?;
+        write!(f, "{}\n", self.dir_name)?;
 
         // print the subfiles
         let files = &self.sub_files;

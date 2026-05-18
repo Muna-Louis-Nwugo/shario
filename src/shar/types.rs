@@ -15,9 +15,9 @@ pub enum OperationType {
 impl OperationType {
     /// Converts operation types into bytes for serializtion:  
     ///
-    ///     AddChar -> 0x00FF  
-    ///     RemoveChar -> 0XFF00  
-    ///     ChangeChar -> 0XFFFF  
+    /// AddChar is 0x00FF  
+    /// RemoveChar is 0XFF00  
+    /// ChangeChar is 0XFFFF  
     pub fn value(self) -> [u8; 2] {
         match self {
             OperationType::AddChar => [0u8, 1u8],

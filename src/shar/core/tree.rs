@@ -22,6 +22,10 @@ pub struct SharFile {
 
 impl SharFile {
     pub fn new(file_path: &str) -> Result<Self> {
+        println!("file path: {}", file_path);
+
+        // FOR NEXT TIME: for some reason the file path provided is correct but it isn't getting
+        // read properly. The error message states that the file wasn't found
         let file = std::fs::read_to_string(file_path);
 
         match file {
@@ -38,12 +42,10 @@ impl SharFile {
                 Ok(shar_file)
             }
 
-            Err(e) => {
-                return Err(Error::ReadFail(
-                    format!("Something went wrong while trying to read file contents: \n {e} \n")
-                        .to_string(),
-                ));
-            }
+            Err(e) => Err(Error::ReadFail(
+                format!("Something went wrong while trying to read file contents: \n {e} \n")
+                    .to_string(),
+            )),
         }
     }
 
@@ -180,7 +182,10 @@ impl SharDirectory {
                     if entry_type.is_dir() {
                         sub_dir_vector.push(Self::new(entry.path().to_str().unwrap())?);
                     } else if entry_type.is_file() {
-                        sub_file_vector.push(SharFile::new(entry.path().to_str().unwrap())?);
+                        print!("File was found \n");
+                        let file = SharFile::new(entry.path().to_str().unwrap())?;
+                        println!("{}", &file);
+                        sub_file_vector.push(file);
                     }
                 }
                 Ok(SharDirectory {

@@ -61,15 +61,15 @@ impl SharFile {
 
         for (i, c) in file_contents.char_indices() {
             // every id starts from one
-            let id = (i + 1 % (ANCHOR_LENGTH)) as u8;
-            let anchor_id: u16 = id as u16 % ANCHOR_LENGTH as u16;
+            let id = (i % (ANCHOR_LENGTH)) as u8 + 1;
+            let anchor_id: u16 = id as u16 / ANCHOR_LENGTH as u16;
             let parent_id = id - 1;
             let val = c;
             let peer_id = 0;
 
             let crdt = CRDT::new(val, id, parent_id, anchor_id, peer_id);
 
-            self.add_CRDT(crdt);
+            self.add_crdt(crdt);
         }
     }
 
@@ -77,15 +77,15 @@ impl SharFile {
     ///
     /// While this is a public function, it is recommended to use standard "add" methods to add new
     /// values accoring to supported IDE specifications.
-    pub fn add_CRDT(&mut self, crdt: CRDT) {
-        let mut anchor_id = crdt.anchor_id;
+    pub fn add_crdt(&mut self, mut crdt: CRDT) {
+        let anchor_id = crdt.anchor_id;
         let parent_id = crdt.parent_id;
         let peer_id = crdt.peer_id;
         let val = crdt.value;
         let id = crdt.id;
 
         // try and get the anchor from the HashMap
-        let mut anchor_map = self.tree.get_mut(&anchor_id);
+        let anchor_map = self.tree.get_mut(&anchor_id);
 
         match anchor_map {
             // if the key existed, then just add a CRDT
@@ -95,7 +95,7 @@ impl SharFile {
                     anchor.insert((peer_id, parent_id), (id, val));
                 } else {
                     //TODO: properly pass this into the next iteration
-                    anchor_id += 1;
+                    crdt.anchor_id += 1;
                     self.create_anchor(&crdt);
                 }
             }
@@ -126,9 +126,11 @@ impl fmt::Display for SharFile {
         write!(f, "{}\n", self.file_path)?;
 
         let crdt_tree = self.tree.clone();
+        let mut anchor_id = 0;
 
         // print out the CRDTs
         for anchor in crdt_tree.into_values() {
+            write!(f, "ANCHOR: {}\n\n", anchor_id)?;
             for crdt in anchor {
                 write!(
                     f,
@@ -136,6 +138,7 @@ impl fmt::Display for SharFile {
                     crdt.0.0, crdt.0.1, crdt.1.0, crdt.1.1
                 )?;
             }
+            anchor_id += 1;
         }
 
         Ok(())

@@ -32,8 +32,8 @@ mod file_io {
     fn test_tree_creation() {
         print!("entered test_tree_creation \n");
         // initialize the tree using a test.txt file
-        // let test_tree = tree::SharDirectory::new("/home/muna/projects/shario/test_material");
-        let test_tree = tree::SharFile::new("/home/muna/projects/shario/test_material/test.txt");
+        let test_tree = tree::SharDirectory::new("/home/muna/projects/shario/test_material");
+        // let test_tree = tree::SharFile::new("/home/muna/projects/shario/test_material/test.txt");
 
         let tree_string: String;
 

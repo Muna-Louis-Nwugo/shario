@@ -23,21 +23,26 @@ pub struct SharFile {
 impl SharFile {
     pub fn new(file_path: &str) -> Result<Self> {
         println!("file path: {}", file_path);
+        // let path = std::fs::canonicalize(file_path)?;
+        // println!("canonicalized file path: {:?}", path);
 
         // FOR NEXT TIME: for some reason the file path provided is correct but it isn't getting
         // read properly. The error message states that the file wasn't found
+        let metadata = std::fs::metadata(file_path)?;
+        println!("metadata: {:?}", metadata);
         let file = std::fs::read_to_string(file_path);
 
         match file {
             Ok(file) => {
+                println!("SharFile::new, okay entered");
                 let mut shar_file = SharFile {
-                    file_path: file.clone(),
+                    file_path: String::from(file_path),
                     tree: HashMap::new(),
                 };
 
                 // it's okay to ignore the Error that could occur here because we're performing the
                 // same check fo end up in this Ok()
-                shar_file.add_file(file)?;
+                shar_file.add_file(String::from(file));
 
                 Ok(shar_file)
             }
@@ -50,39 +55,22 @@ impl SharFile {
     }
 
     /// Adds all the contents of a file to the tree.
-    fn add_file(&mut self, file_path: String) -> Result<()> {
-        // pull contents of the file
-        let file_contents = std::fs::read_to_string(file_path);
-        // ids. When a file is being created, the ids will just represent the order in which they
-        // were added to the tree (AKA their position in the file)
-
+    fn add_file(&mut self, file_contents: String) {
         // the shar specification states that peer 0 is reserved for the char itself to add to the
         // tree as necessary
 
-        match file_contents {
-            Ok(contents) => {
-                for (i, c) in contents.char_indices() {
-                    let id = (i % (ANCHOR_LENGTH)) as u8;
-                    let anchor_id: u16 = id as u16 % ANCHOR_LENGTH as u16;
-                    let parent_id = id - 1;
-                    let val = c;
-                    let peer_id = 0;
+        for (i, c) in file_contents.char_indices() {
+            // every id starts from one
+            let id = (i + 1 % (ANCHOR_LENGTH)) as u8;
+            let anchor_id: u16 = id as u16 % ANCHOR_LENGTH as u16;
+            let parent_id = id - 1;
+            let val = c;
+            let peer_id = 0;
 
-                    let crdt = CRDT::new(val, id, parent_id, anchor_id, peer_id);
+            let crdt = CRDT::new(val, id, parent_id, anchor_id, peer_id);
 
-                    self.add_CRDT(crdt);
-                }
-            }
-
-            Err(e) => {
-                return Err(Error::ReadFail(
-                    format!("Something went wrong while trying to read file contents: \n {e} \n")
-                        .to_string(),
-                ));
-            }
-        };
-
-        Ok(())
+            self.add_CRDT(crdt);
+        }
     }
 
     /// Adds a CRDT to the tree.
@@ -106,6 +94,7 @@ impl SharFile {
                 if anchor.values().collect::<Vec<_>>().len() <= 250 {
                     anchor.insert((peer_id, parent_id), (id, val));
                 } else {
+                    //TODO: properly pass this into the next iteration
                     anchor_id += 1;
                     self.create_anchor(&crdt);
                 }
@@ -143,7 +132,7 @@ impl fmt::Display for SharFile {
             for crdt in anchor {
                 write!(
                     f,
-                    "Peer_id: {}; parent_id: {}; id: {}; value: {}",
+                    "Peer_id: {}; parent_id: {}; id: {}; value: {} \n",
                     crdt.0.0, crdt.0.1, crdt.1.0, crdt.1.1
                 )?;
             }

@@ -1,17 +1,14 @@
 //! Contains character tree that manages local state
 use std::fmt;
-use std::path::Path;
-
-use tokio::time::error;
 
 use crate::shar::error::Error;
 use crate::shar::prelude::*;
 use std::collections::HashMap;
-use std::path;
 
 // Represents an anchor. Each node is a decomposed CRDT
 // Key is (Peer_id, parent_id)
 // Value is (id, value)
+// TODO: Lowkey might need to include peer id of child as well as parent
 pub type Anchor = HashMap<(ID_SIZE, ID_SIZE), (ID_SIZE, char)>;
 
 /// Represents a file in the shar
@@ -21,15 +18,8 @@ pub struct SharFile {
 }
 
 impl SharFile {
+    // TODO: Tree traversal to reconstruct file
     pub fn new(file_path: &str) -> Result<Self> {
-        println!("file path: {}", file_path);
-        // let path = std::fs::canonicalize(file_path)?;
-        // println!("canonicalized file path: {:?}", path);
-
-        // FOR NEXT TIME: for some reason the file path provided is correct but it isn't getting
-        // read properly. The error message states that the file wasn't found
-        let metadata = std::fs::metadata(file_path)?;
-        println!("metadata: {:?}", metadata);
         let file = std::fs::read_to_string(file_path);
 
         match file {
@@ -176,7 +166,7 @@ impl SharDirectory {
                     } else if entry_type.is_file() {
                         print!("File was found \n");
                         let file = SharFile::new(entry.path().to_str().unwrap())?;
-                        println!("{}", &file);
+
                         sub_file_vector.push(file);
                     }
                 }

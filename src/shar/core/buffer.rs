@@ -2,10 +2,7 @@ use crate::shar::io::io_info;
 use crate::shar::prelude::*;
 use tokio::fs::File;
 // use tokio::io::{self, AsyncWriteExt, BufWriter};
-use tokio::io::{AsyncWriteExt, BufReader, BufWriter};
-
-use crate::shar::prelude::Error;
-use crate::shar::types::Operation;
+use tokio::io::{AsyncWriteExt, BufWriter};
 
 pub struct Buffer {
     write_buffer: BufWriter<File>,
@@ -18,10 +15,10 @@ impl Buffer {
         // TODO: WHEN THE TIME COMES, UPDATE THIS TO SOMEHOW TRANSMIT ACROSS A NETWORK
 
         // make the write_buffer
-        let make_write_buffer = File::create(io_info::file_location).await;
+        let make_write_buffer = File::create(io_info::FILE_LOCATION).await;
         // let make_read_buffer = File::open("projects/shario_output/write_buffer.txt").await;
 
-        let write_buffer_result = match make_write_buffer {
+        match make_write_buffer {
             Ok(file) => {
                 return Some(Buffer {
                     write_buffer: BufWriter::new(file),
@@ -56,7 +53,7 @@ impl Buffer {
 }
 
 pub trait FileWrite {
-    async fn write(&mut self, operation: [u8; 14]);
+    fn write(&mut self, operation: [u8; 14]) -> impl std::future::Future<Output = ()> + Send;
 
     fn read(self) -> Result<Vec<u8>>;
 }
@@ -64,7 +61,7 @@ pub trait FileWrite {
 impl FileWrite for Buffer {
     async fn write(&mut self, operation: [u8; 14]) {
         // For now, just write to the file.
-        self.write_buffer.write(&operation).await;
+        let _ = self.write_buffer.write(&operation).await;
     }
 
     fn read(self) -> Result<Vec<u8>> {

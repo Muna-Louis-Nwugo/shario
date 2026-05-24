@@ -2,8 +2,8 @@
 
 // GLOBAL VARIABLES
 pub const ANCHOR_BOUNDARY: usize = 250;
-pub type ID_SIZE = u8;
-pub type ANCHOR_ID_SIZE = u16;
+pub type IdSize = u8;
+pub type AnchorIdSize = u16;
 
 /// Types of operations that can be made
 pub enum OperationType {
@@ -39,20 +39,20 @@ impl OperationType {
 /// ancor will have a parent_id of 0x0
 pub struct CRDT {
     pub value: char,
-    pub id: ID_SIZE,
-    pub parent_id: ID_SIZE,
-    pub anchor_id: ANCHOR_ID_SIZE,
-    pub peer_id: ID_SIZE,
+    pub id: IdSize,
+    pub parent_id: IdSize,
+    pub anchor_id: AnchorIdSize,
+    pub peer_id: IdSize,
 }
 
 impl CRDT {
     /// Creates a new CRDT
     pub fn new(
         value: char,
-        id: ID_SIZE,
-        parent_id: ID_SIZE,
-        anchor_id: ANCHOR_ID_SIZE,
-        peer_id: ID_SIZE,
+        id: IdSize,
+        parent_id: IdSize,
+        anchor_id: AnchorIdSize,
+        peer_id: IdSize,
     ) -> Self {
         CRDT {
             value: value,

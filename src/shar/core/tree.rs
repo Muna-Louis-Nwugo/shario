@@ -9,12 +9,12 @@ use std::collections::HashMap;
 // Key is (Peer_id, parent_id)
 // Value is (id, value)
 // TODO: Lowkey might need to include peer id of child as well as parent
-pub type Anchor = HashMap<(ID_SIZE, ID_SIZE), (ID_SIZE, char)>;
+pub type Anchor = HashMap<(IdSize, IdSize), (IdSize, char)>;
 
 /// Represents a file in the shar
 pub struct SharFile {
     file_path: String,
-    tree: HashMap<ANCHOR_ID_SIZE, Anchor>,
+    tree: HashMap<AnchorIdSize, Anchor>,
 }
 
 impl SharFile {

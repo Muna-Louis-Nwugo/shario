@@ -1,8 +1,8 @@
 // general imports that will be used throughout the project
 
 pub use super::error::Error;
-pub use crate::shar::types;
-pub use tokio::io;
+use crate::shar::types;
+use tokio::io;
 
 // Result Alias
 pub type Result<T> = core::result::Result<T, Error>;
@@ -24,6 +24,6 @@ pub type Operation = types::Operation;
 // GLOBAL VARIABLES / PRIMITIVE TYPE ALIASES
 pub const ANCHOR_LENGTH: usize = types::ANCHOR_BOUNDARY;
 
-pub type ID_SIZE = types::ID_SIZE;
+pub type IdSize = types::IdSize;
 
-pub type ANCHOR_ID_SIZE = types::ANCHOR_ID_SIZE;
+pub type AnchorIdSize = types::AnchorIdSize;

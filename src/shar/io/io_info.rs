@@ -1,1 +1,1 @@
-pub const file_location: &str = "/home/muna/projects/shario/write_buffer.txt";
+pub const FILE_LOCATION: &str = "/home/muna/projects/shario/write_buffer.txt";

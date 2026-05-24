@@ -1,4 +1,3 @@
-use tokio::io::AsyncBufReadExt;
 #[cfg(test)]
 mod file_io {
     use crate::core::buffer;
@@ -7,7 +6,7 @@ mod file_io {
 
     async fn file_write() {
         let operation = [1u8; 14];
-        let mut buff = buffer::Buffer::new().await;
+        let buff = buffer::Buffer::new().await;
         println!("buff finished running");
 
         match buff {
@@ -23,10 +22,10 @@ mod file_io {
         }
     }
 
-    // #[tokio::test]
-    // async fn test_file_write() {
-    //     file_write().await;
-    // }
+    #[tokio::test]
+    async fn test_file_write() {
+        file_write().await;
+    }
 
     #[test]
     fn test_tree_creation() {

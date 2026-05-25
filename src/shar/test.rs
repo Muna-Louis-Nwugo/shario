@@ -6,7 +6,7 @@ mod file_io {
 
     async fn file_write() {
         let operation = [1u8; 14];
-        let buff = buffer::Buffer::new().await;
+        let buff = buffer::SharBuffer::new().await;
         println!("buff finished running");
 
         match buff {

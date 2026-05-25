@@ -4,13 +4,13 @@ use tokio::fs::File;
 // use tokio::io::{self, AsyncWriteExt, BufWriter};
 use tokio::io::{AsyncWriteExt, BufWriter};
 
-pub struct Buffer {
+pub struct SharBuffer {
     write_buffer: BufWriter<File>,
     // read_buffer: BufReader<File>,
 }
 
-impl Buffer {
-    pub async fn new() -> Option<Buffer> {
+impl SharBuffer {
+    pub async fn new() -> Option<SharBuffer> {
         /* Creates a new write_buffer*/
         // TODO: WHEN THE TIME COMES, UPDATE THIS TO SOMEHOW TRANSMIT ACROSS A NETWORK
 
@@ -20,7 +20,7 @@ impl Buffer {
 
         match make_write_buffer {
             Ok(file) => {
-                return Some(Buffer {
+                return Some(SharBuffer {
                     write_buffer: BufWriter::new(file),
                 });
             }
@@ -58,7 +58,7 @@ pub trait FileWrite {
     fn read(self) -> Result<Vec<u8>>;
 }
 
-impl FileWrite for Buffer {
+impl FileWrite for SharBuffer {
     async fn write(&mut self, operation: [u8; 14]) {
         // For now, just write to the file.
         let _ = self.write_buffer.write(&operation).await;

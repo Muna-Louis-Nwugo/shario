@@ -144,8 +144,8 @@ pub struct SharDirectory {
 
 impl SharDirectory {
     /// Doesn't yet support symlinks anywhere in the tree being initialized
-    pub fn new(dir_path: &str) -> Result<Self> {
-        let entries = std::fs::read_dir(dir_path);
+    pub fn new(dir_path: String) -> Result<Self> {
+        let entries = std::fs::read_dir(&dir_path);
         let mut sub_dir_vector = Vec::new();
         let mut sub_file_vector = Vec::new();
 
@@ -162,7 +162,8 @@ impl SharDirectory {
                     let entry_type = entry.file_type()?;
                     // if it's a directory, recursively create a new SharDir
                     if entry_type.is_dir() {
-                        sub_dir_vector.push(Self::new(entry.path().to_str().unwrap())?);
+                        sub_dir_vector
+                            .push(Self::new(String::from(entry.path().to_str().unwrap()))?);
                     } else if entry_type.is_file() {
                         print!("File was found \n");
                         let file = SharFile::new(entry.path().to_str().unwrap())?;
@@ -171,7 +172,7 @@ impl SharDirectory {
                     }
                 }
                 Ok(SharDirectory {
-                    dir_name: String::from(dir_path),
+                    dir_name: String::from(&dir_path),
                     sub_dir: sub_dir_vector,
                     sub_files: sub_file_vector,
                 })

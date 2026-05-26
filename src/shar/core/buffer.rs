@@ -1,3 +1,4 @@
+use crate::shar::error::Error;
 use crate::shar::io::io_info;
 use crate::shar::prelude::*;
 use tokio::fs::File;
@@ -10,7 +11,7 @@ pub struct SharBuffer {
 }
 
 impl SharBuffer {
-    pub async fn new() -> Option<SharBuffer> {
+    pub async fn new() -> Result<SharBuffer> {
         /* Creates a new write_buffer*/
         // TODO: WHEN THE TIME COMES, UPDATE THIS TO SOMEHOW TRANSMIT ACROSS A NETWORK
 
@@ -19,18 +20,13 @@ impl SharBuffer {
         // let make_read_buffer = File::open("projects/shario_output/write_buffer.txt").await;
 
         match make_write_buffer {
-            Ok(file) => {
-                return Some(SharBuffer {
-                    write_buffer: BufWriter::new(file),
-                });
-            }
+            Ok(file) => Ok(SharBuffer {
+                write_buffer: BufWriter::new(file),
+            }),
 
             // TODO: Come up with something else other than panicking
-            Err(error) => {
-                println!("File create Errored: {}", error);
-                return None;
-            }
-        };
+            Err(error) => Err(Error::Generic(format!("File create errored: {error}",))),
+        }
     }
 
     pub async fn write_general(&mut self, operation: [u8; 14]) {

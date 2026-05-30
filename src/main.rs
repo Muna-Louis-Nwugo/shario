@@ -1,5 +1,7 @@
 mod shar;
 
+use std::thread;
+
 use shar::error;
 
 use clap::{Parser, Subcommand};
@@ -28,9 +30,12 @@ enum Command {
     },
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let cmd = Shar::parse();
 
+    let input;
+    let output;
     match cmd.command {
         Command::Init {
             session_id,
@@ -39,8 +44,16 @@ fn main() {
             let shar_init = block_on(initialize_shar(session_id, directory_path));
 
             match shar_init {
-                Ok(resources) => {
+                Ok((dir, que, buff)) => {
                     // launch threads
+                    input = thread::spawn(move || {
+                        let queue = que;
+                        let tree = dir;
+                    });
+
+                    output = tokio::spawn(async move {
+                        let buffer = buff;
+                    });
                 }
 
                 Err(e) => {

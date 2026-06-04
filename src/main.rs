@@ -59,8 +59,13 @@ async fn main() {
                         let queue = que;
                         let tree = dir;
 
-                        let received = input_rx.recv().unwrap();
-                        println!("{}", received);
+                        let mut num_received = 0;
+
+                        while num_received < 5 {
+                            let received = input_rx.recv().unwrap();
+                            println!("{}", received);
+                            num_received += 1;
+                        }
                     });
 
                     output = tokio::spawn(async move {
@@ -81,8 +86,12 @@ async fn main() {
         arguments: vec![String::from("Message got through")],
     };
 
-    input_tx.send("hi").unwrap();
-    println!("message sent");
+    for i in 0..10 {
+        if i % 2 == 0 {
+            input_tx.send("hi").unwrap();
+            println!("message sent");
+        }
+    }
 }
 
 // supporting functions

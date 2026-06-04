@@ -1,11 +1,15 @@
+mod messages;
 mod shar;
 
+use std::sync::mpsc;
 use std::thread;
 
 use shar::error;
 
 use clap::{Parser, Subcommand};
 
+use crate::messages::InputCommand;
+use crate::messages::InputMessage;
 use crate::shar::core::buffer::SharBuffer;
 use crate::shar::core::queue::SharQueue;
 use crate::shar::core::tree::SharDirectory;
@@ -17,13 +21,13 @@ use pollster::block_on;
 #[command(version, about, long_about = None)]
 struct Shar {
     #[command(subcommand)]
-    command: Command,
+    command: SharCommand,
 }
 
 /// Defines available Shar Commands
 #[derive(Subcommand, Debug)]
 #[command(arg_required_else_help(true))]
-enum Command {
+enum SharCommand {
     Init {
         session_id: u32,
         directory_path: String,
@@ -32,12 +36,17 @@ enum Command {
 
 #[tokio::main]
 async fn main() {
+    println!("main started");
     let cmd = Shar::parse();
 
     let input;
+    let (input_tx, input_rx) = mpsc::channel();
+
+    // TODO: write the message passing system for the output
     let output;
+
     match cmd.command {
-        Command::Init {
+        SharCommand::Init {
             session_id,
             directory_path,
         } => {
@@ -49,6 +58,9 @@ async fn main() {
                     input = thread::spawn(move || {
                         let queue = que;
                         let tree = dir;
+
+                        let received = input_rx.recv().unwrap();
+                        println!("{}", received);
                     });
 
                     output = tokio::spawn(async move {
@@ -62,6 +74,15 @@ async fn main() {
             }
         }
     }
+
+    // practice InputMessage
+    let input_message = InputMessage {
+        command: InputCommand::AddCRDT,
+        arguments: vec![String::from("Message got through")],
+    };
+
+    input_tx.send("hi").unwrap();
+    println!("message sent");
 }
 
 // supporting functions

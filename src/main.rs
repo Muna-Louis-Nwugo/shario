@@ -79,7 +79,7 @@ async fn main() {
                     _input = SharInputer::new(que, dir);
 
                     _output = tokio::spawn(async move {
-                        let buffer = buff;
+                        let _buffer = buff;
                     });
                 }
 
@@ -91,7 +91,7 @@ async fn main() {
     }
 
     // practice InputMessage
-    let input_message = InputMessage {
+    let _input_message = InputMessage {
         command: InputCommand::AddCRDT,
         arguments: vec![String::from("Message got through")],
     };
@@ -112,10 +112,10 @@ impl SharInputer {
     pub fn new(que: SharQueue, dir: SharDirectory) -> Self {
         let (tx, rx) = mpsc::channel();
         let input = thread::spawn(move || {
-            let queue = que;
-            let tree = dir;
+            let _queue = que;
+            let _tree = dir;
 
-            let received: SharInput = rx.recv().unwrap();
+            let _received: SharInput = rx.recv().unwrap();
         });
 
         SharInputer {

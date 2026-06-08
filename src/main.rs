@@ -9,6 +9,7 @@ use shar::error;
 use axum::{Router, routing::get};
 use clap::{Parser, Subcommand};
 use pollster::block_on;
+use socketioxide::{SocketIo, extract::SocketRef};
 
 use crate::messages::InputCommand;
 use crate::messages::InputMessage;
@@ -39,23 +40,31 @@ async fn main() {
     println!("main started");
     let cmd = Shar::parse();
 
+    // enable websockets
+    let (layer, io) = SocketIo::new_layer();
+
+    // pass handler into "/" namespace of the SocketIO instance
+    io.ns("/", on_connect);
+
     let app = Router::new()
         .route(
             "/",
             get(|| async { "please select input '/in' or output '/out'" }),
         )
-        .route("/in", get(SharInputer::handle));
+        .route("/in", get(SharInputer::handle))
+        .layer(layer);
 
     // start a TCP listener on localhost:3000
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
         .await
         .unwrap();
 
+    // start server
     axum::serve(listener, app).await.unwrap();
 
-    let input: SharInputer;
+    let _input: SharInputer;
     // TODO: write the message passing system for the output
-    let output: tokio::task::JoinHandle<()>;
+    let _output: tokio::task::JoinHandle<()>;
 
     match cmd.command {
         SharCommand::Init {
@@ -67,9 +76,9 @@ async fn main() {
             match shar_init {
                 Ok((dir, que, buff)) => {
                     // launch threads
-                    input = SharInputer::new(que, dir);
+                    _input = SharInputer::new(que, dir);
 
-                    output = tokio::spawn(async move {
+                    _output = tokio::spawn(async move {
                         let buffer = buff;
                     });
                 }
@@ -118,6 +127,11 @@ impl SharInputer {
     pub async fn handle() -> &'static str {
         "Initiating input"
     }
+}
+
+/// Web socket connection handler
+async fn on_connect(socket: SocketRef) {
+    println!("socket connected {}", socket.id);
 }
 
 // supporting functions

@@ -39,7 +39,19 @@ async fn main() {
     println!("main started");
     let cmd = Shar::parse();
 
-    let app = Router::new().route("/in", get(SharInputer::handle));
+    let app = Router::new()
+        .route(
+            "/",
+            get(|| async { "please select input '/in' or output '/out'" }),
+        )
+        .route("/in", get(SharInputer::handle));
+
+    // start a TCP listener on localhost:3000
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+        .await
+        .unwrap();
+
+    axum::serve(listener, app).await.unwrap();
 
     let input: SharInputer;
     // TODO: write the message passing system for the output
@@ -76,6 +88,7 @@ async fn main() {
     };
 }
 
+//TODO: Make a SharOutputer
 /// The shar's input manager
 struct SharInputer {
     thread: thread::JoinHandle<()>,
@@ -103,7 +116,7 @@ impl SharInputer {
     }
 
     pub async fn handle() -> &'static str {
-        "Hello World"
+        "Initiating input"
     }
 }
 

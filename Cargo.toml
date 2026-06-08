@@ -4,14 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+axum = "0.8.9"
 clap = { version = "4.6.1", features = ["derive"] }
 pollster = "0.4.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+socketioxide = "0.18.3"
 thiserror = "1"
-# IO
-tokio = {version = "1.51.0", features = ["macros", "rt-multi-thread", "net", "fs", "io-util", "test-util"]}
-# for command line interfaces
-# clap = {version = '4', features = ["cargo"]}
+tokio = {version = "1.51.0", features = ["macros", "rt-multi-thread", "fs",  "test-util"]}
 
-[dev-dependencies]
-# more usable error handling / tests
-anyhow = "1"

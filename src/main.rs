@@ -45,8 +45,19 @@ enum SharCommand {
 async fn on_connect(socket: SocketRef) {
     println!("socket connected {}", socket.id);
 
+    // joins rooms (after receiving a join event from the client)
+
+    socket.on("join", async |socket: SocketRef, Data::<String>(room)| {
+        println!("received join {:?}", room);
+        // removes client from any rooms. Makes sure that every client is only ever a  part of one
+        // room
+        socket.leave_all();
+        socket.join(room);
+    });
+
+    // handles incoming messages from rooms
     socket.on(
-        "input local",
+        "input",
         async |socket: SocketRef, Data::<MessageIn>(data)| {
             println!("received message {:?}", "command origin not recognized");
 
@@ -101,6 +112,7 @@ async fn main() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:1324")
         .await
         .unwrap();
+    println!("Server Started on localhost:1324");
 
     // start server
     axum::serve(listener, app).await.unwrap();

@@ -4,7 +4,8 @@
 #[derive(Debug, serde::Deserialize)]
 pub struct MessageIn {
     pub room: String,
-    pub text: String,
+    pub val: String,
+    pub input: bool,
 }
 /// An input message
 pub struct InputMessage {

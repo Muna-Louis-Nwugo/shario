@@ -4,18 +4,24 @@ mod shar;
 use std::sync::mpsc;
 use std::thread;
 
-use shar::error;
-
 use axum::{Router, routing::get};
 use clap::{Parser, Subcommand};
 use pollster::block_on;
-use socketioxide::{SocketIo, extract::SocketRef};
+use serde_json::Value;
+use socketioxide::{
+    SocketIo,
+    extract::{Data, SocketRef},
+};
+use tower::ServiceBuilder;
+use tower_http::cors::CorsLayer;
 
-use crate::messages::InputCommand;
 use crate::messages::InputMessage;
+use crate::messages::{InputCommand, MessageIn, MessageOut};
 use crate::shar::core::buffer::SharBuffer;
 use crate::shar::core::queue::SharQueue;
 use crate::shar::core::tree::SharDirectory;
+use crate::shar::error;
+use crate::shar::prelude;
 
 /// Shar CLI
 #[derive(Parser, Debug)]
@@ -35,6 +41,39 @@ enum SharCommand {
     },
 }
 
+/// Web socket connection handler
+async fn on_connect(socket: SocketRef) {
+    println!("socket connected {}", socket.id);
+
+    socket.on(
+        "input local",
+        async |socket: SocketRef, Data::<MessageIn>(data)| {
+            println!("received message {:?}", "command origin not recognized");
+
+            let message: MessageOut;
+
+            if data.room == String::from("ide") {
+                message = MessageOut {
+                    success: true,
+                    message: String::from("Message Received"),
+                }
+            } else if data.room == String::from("network") {
+                message = MessageOut {
+                    success: true,
+                    message: String::from("Message Received"),
+                }
+            } else {
+                message = MessageOut {
+                    success: false,
+                    message: String::from("Room not recognized"),
+                }
+            }
+
+            let _ = socket.within(data.room).emit("message", &message);
+        },
+    );
+}
+
 #[tokio::main]
 async fn main() {
     println!("main started");
@@ -52,10 +91,14 @@ async fn main() {
             get(|| async { "please select input '/in' or output '/out'" }),
         )
         .route("/in", get(SharInputer::handle))
-        .layer(layer);
+        .layer(
+            ServiceBuilder::new()
+                .layer(CorsLayer::permissive())
+                .layer(layer),
+        );
 
-    // start a TCP listener on localhost:3000
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
+    // start a TCP listener on localhost:1324
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:1324")
         .await
         .unwrap();
 
@@ -89,23 +132,13 @@ async fn main() {
             }
         }
     }
-
-    // practice InputMessage
-    let _input_message = InputMessage {
-        command: InputCommand::AddCRDT,
-        arguments: vec![String::from("Message got through")],
-    };
 }
 
-//TODO: Make a SharOutputer
+// TODO: Make a SharOutputer
 /// The shar's input manager
 struct SharInputer {
     thread: thread::JoinHandle<()>,
-    transmitter: mpsc::Sender<SharInput>,
-}
-
-struct SharInput {
-    val: String,
+    transmitter: mpsc::Sender<InputMessage>,
 }
 
 impl SharInputer {
@@ -115,7 +148,7 @@ impl SharInputer {
             let _queue = que;
             let _tree = dir;
 
-            let _received: SharInput = rx.recv().unwrap();
+            let _received: InputMessage = rx.recv().unwrap();
         });
 
         SharInputer {
@@ -127,11 +160,6 @@ impl SharInputer {
     pub async fn handle() -> &'static str {
         "Initiating input"
     }
-}
-
-/// Web socket connection handler
-async fn on_connect(socket: SocketRef) {
-    println!("socket connected {}", socket.id);
 }
 
 // supporting functions

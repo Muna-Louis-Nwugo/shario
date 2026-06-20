@@ -14,4 +14,7 @@ pub enum Error {
 
     #[error("InitFail: {0}")]
     InitFail(String),
+
+    #[error("UnknownOrigin: {0}")]
+    UnknownOrigin(String),
 }

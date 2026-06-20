@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod file_io {
-    use crate::core::buffer;
-    use crate::core::tree;
+    use crate::shar::core::buffer;
+    use crate::shar::core::tree;
     use tokio;
 
     async fn file_write() {

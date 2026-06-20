@@ -1,6 +1,6 @@
 pub mod core;
 pub mod error;
 pub mod io;
-mod prelude;
+pub mod prelude;
 mod test;
 mod types;

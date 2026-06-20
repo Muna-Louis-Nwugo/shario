@@ -12,4 +12,6 @@ serde_json = "1.0.150"
 socketioxide = "0.18.3"
 thiserror = "1"
 tokio = {version = "1.51.0", features = ["macros", "rt-multi-thread", "fs",  "test-util"]}
+tower = "0.5.3"
+tower-http = { version = "0.6.11", features = ["cors"] }
 

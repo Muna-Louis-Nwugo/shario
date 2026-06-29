@@ -26,4 +26,4 @@ pub const ANCHOR_LENGTH: usize = types::ANCHOR_BOUNDARY;
 
 pub type IdSize = types::IdSize;
 
-pub type AnchorIdSize = types::AnchorIdSize;
+pub type LineSize = u16;

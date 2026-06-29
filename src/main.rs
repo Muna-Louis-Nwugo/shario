@@ -59,8 +59,6 @@ async fn on_connect(socket: SocketRef) {
     socket.on(
         "input",
         async |socket: SocketRef, Data::<MessageIn>(data)| {
-            println!("received message {:?}", "command origin not recognized");
-
             let message: MessageOut;
 
             if data.room == String::from("ide") {
@@ -80,6 +78,7 @@ async fn on_connect(socket: SocketRef) {
                 }
             }
 
+            println!("received message {:?} from room {:?}", data.val, data.room);
             let _ = socket.within(data.room).emit("message", &message);
         },
     );

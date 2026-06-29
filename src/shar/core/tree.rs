@@ -9,41 +9,20 @@ use std::collections::HashMap;
 // Key is (Peer_id, parent_id)
 // Value is (id, value)
 // TODO: Lowkey might need to include peer id of child as well as parent
-pub type Anchor = HashMap<(IdSize, IdSize), (IdSize, char)>;
+pub type Line = HashMap<(IdSize, IdSize), (IdSize, char)>;
+
+// Behaviours for structs representing file system or directory names
+pub trait Entry<T> {
+    fn new(file_path: String) -> Result<T>;
+}
 
 /// Represents a file in the shar
 pub struct SharFile {
     file_path: String,
-    tree: HashMap<AnchorIdSize, Anchor>,
+    tree: HashMap<LineSize, Line>,
 }
 
 impl SharFile {
-    // TODO: Tree traversal to reconstruct file
-    pub fn new(file_path: &str) -> Result<Self> {
-        let file = std::fs::read_to_string(file_path);
-
-        match file {
-            Ok(file) => {
-                println!("SharFile::new, okay entered");
-                let mut shar_file = SharFile {
-                    file_path: String::from(file_path),
-                    tree: HashMap::new(),
-                };
-
-                // it's okay to ignore the Error that could occur here because we're performing the
-                // same check fo end up in this Ok()
-                shar_file.add_file(String::from(file));
-
-                Ok(shar_file)
-            }
-
-            Err(e) => Err(Error::ReadFail(
-                format!("Something went wrong while trying to read file contents: \n {e} \n")
-                    .to_string(),
-            )),
-        }
-    }
-
     /// Adds all the contents of a file to the tree.
     fn add_file(&mut self, file_contents: String) {
         // the shar specification states that peer 0 is reserved for the char itself to add to the
@@ -52,12 +31,9 @@ impl SharFile {
         for (i, c) in file_contents.char_indices() {
             // every id starts from one
             let id = (i % (ANCHOR_LENGTH)) as u8 + 1;
-            let anchor_id: u16 = id as u16 / ANCHOR_LENGTH as u16;
-            let parent_id = id - 1;
             let val = c;
-            let peer_id = 0;
 
-            let crdt = CRDT::new(val, id, parent_id, anchor_id, peer_id);
+            let crdt = CRDT::new(val, id);
 
             self.add_crdt(crdt);
         }
@@ -68,9 +44,6 @@ impl SharFile {
     /// While this is a public function, it is recommended to use standard "add" methods to add new
     /// values accoring to supported IDE specifications.
     pub fn add_crdt(&mut self, mut crdt: CRDT) {
-        let anchor_id = crdt.anchor_id;
-        let parent_id = crdt.parent_id;
-        let peer_id = crdt.peer_id;
         let val = crdt.value;
         let id = crdt.id;
 
@@ -97,9 +70,6 @@ impl SharFile {
     }
 
     fn create_anchor(&mut self, crdt: &CRDT) {
-        let anchor_id = crdt.anchor_id;
-        let parent_id = crdt.parent_id;
-        let peer_id = crdt.peer_id;
         let val = crdt.value;
         let id = crdt.id;
 
@@ -107,6 +77,34 @@ impl SharFile {
             anchor_id,
             HashMap::from([((peer_id, parent_id), (id, val))]),
         );
+    }
+}
+
+impl Entry<SharFile> for SharFile {
+    // TODO: Tree traversal to reconstruct file
+    fn new(file_path: String) -> Result<Self> {
+        let file = std::fs::read_to_string(&file_path);
+
+        match file {
+            Ok(file) => {
+                println!("SharFile::new, okay entered");
+                let mut shar_file = SharFile {
+                    file_path: file_path,
+                    tree: HashMap::new(),
+                };
+
+                // it's okay to ignore the Error that could occur here because we're performing the
+                // same check fo end up in this Ok()
+                shar_file.add_file(file);
+
+                Ok(shar_file)
+            }
+
+            Err(e) => Err(Error::ReadFail(
+                format!("Something went wrong while trying to read file contents: \n {e} \n")
+                    .to_string(),
+            )),
+        }
     }
 }
 
@@ -142,9 +140,9 @@ pub struct SharDirectory {
     sub_files: Vec<SharFile>,
 }
 
-impl SharDirectory {
+impl Entry for SharDirectory {
     /// Doesn't yet support symlinks anywhere in the tree being initialized
-    pub fn new(dir_path: String) -> Result<Self> {
+    fn new(dir_path: String) -> Result<Self> {
         let entries = std::fs::read_dir(&dir_path);
         let mut sub_dir_vector = Vec::new();
         let mut sub_file_vector = Vec::new();

@@ -3,7 +3,6 @@
 // GLOBAL VARIABLES
 pub const ANCHOR_BOUNDARY: usize = 250;
 pub type IdSize = u8;
-pub type AnchorIdSize = u16;
 
 /// Types of operations that can be made
 pub enum OperationType {
@@ -27,39 +26,43 @@ impl OperationType {
     }
 }
 
+/// The two possible character sizes.
+///
+/// Small: u8 - a single byte character
+/// Wide: char - a 4 byte character
+///
+/// The Shar will attempt to store the value in a single byte, and if that's impossible, it will
+/// fall back to a char
+pub enum Atom {
+    Small(u8),
+    Wide(char),
+}
+
 /// Represents the chosen CRDT: Replicated Growable Array. Anchors are used to bound tree traversal
 /// and keep the footprint of the CRDT as small as possible for serialization
 ///
-/// value: char -> Character value of the type
-/// id: u8 -> the id of this specific instance
-/// parent_id: u8 -> ID of the parent of this instance (which will be relative to its anchor)
-/// anchor_id: u16 -> ID of this instance's anchor
-///
-/// Note: anchors will be inserted as "characters" in the tree. The first character after an
-/// ancor will have a parent_id of 0x0
+/// value: Atom -> the value of this specific character
+/// id: u8 -> the id of this specific character
 pub struct CRDT {
-    pub value: char,
+    pub value: Atom,
     pub id: IdSize,
-    pub parent_id: IdSize,
-    pub anchor_id: AnchorIdSize,
-    pub peer_id: IdSize,
 }
 
 impl CRDT {
     /// Creates a new CRDT
-    pub fn new(
-        value: char,
-        id: IdSize,
-        parent_id: IdSize,
-        anchor_id: AnchorIdSize,
-        peer_id: IdSize,
-    ) -> Self {
-        CRDT {
-            value: value,
-            id: id,
-            parent_id: parent_id,
-            anchor_id: anchor_id,
-            peer_id: peer_id,
+    pub fn new(value: char, id: IdSize) -> Self {
+        let potential_u8 = u8::try_from(value);
+
+        match potential_u8 {
+            Ok(byte) => CRDT {
+                value: Atom::Small(byte),
+                id: id,
+            },
+
+            Err(_e) => CRDT {
+                value: Atom::Wide(value),
+                id: id,
+            },
         }
     }
 
@@ -74,7 +77,17 @@ impl CRDT {
         let mut byte_array: [u8; 9] = [0; 9];
 
         // turn value into 4-byte array and move to byte_array
-        let value: [u8; 4] = (self.value as u32).to_be_bytes();
+        let value: [u8; 4];
+
+        match self.value {
+            Atom::Small(a) => {
+                value = (a as u32).to_be_bytes();
+            }
+
+            Atom::Wide(b) => {
+                value = (b as u32).to_be_bytes();
+            }
+        }
 
         for (i, val) in value.into_iter().enumerate() {
             byte_array[i] = val;
@@ -82,17 +95,6 @@ impl CRDT {
 
         // copy ID and parent_id into byte_array
         byte_array[4] = self.id;
-        byte_array[5] = self.parent_id;
-
-        // turn anchor_id into 2-byte array and move to byte_array
-        let anchor: [u8; 2] = self.anchor_id.to_be_bytes();
-
-        for (i, val) in anchor.into_iter().enumerate() {
-            byte_array[i + 5] = val;
-        }
-
-        // copy peer_id into the array
-        byte_array[8] = self.peer_id;
 
         byte_array
     }

@@ -1,9 +1,8 @@
 //! Shar types for crdts and operations
 
-// GLOBAL VARIABLES
-pub const ANCHOR_BOUNDARY: usize = 250;
-pub type IdSize = u8;
+use crate::prelude::*;
 
+// GLOBAL VARIABLES
 /// Types of operations that can be made
 pub enum OperationType {
     AddChar,
@@ -26,18 +25,6 @@ impl OperationType {
     }
 }
 
-/// The two possible character sizes.
-///
-/// Small: u8 - a single byte character
-/// Wide: char - a 4 byte character
-///
-/// The Shar will attempt to store the value in a single byte, and if that's impossible, it will
-/// fall back to a char
-pub enum Atom {
-    Small(u8),
-    Wide(char),
-}
-
 /// Represents the chosen CRDT: Replicated Growable Array. Anchors are used to bound tree traversal
 /// and keep the footprint of the CRDT as small as possible for serialization
 ///
@@ -46,23 +33,18 @@ pub enum Atom {
 pub struct CRDT {
     pub value: Atom,
     pub id: IdSize,
+    pub peer_id: PeerIdSize,
 }
 
 impl CRDT {
     /// Creates a new CRDT
-    pub fn new(value: char, id: IdSize) -> Self {
-        let potential_u8 = u8::try_from(value);
+    pub fn new(value: char, id: IdSize, peer_id: PeerIdSize) -> Self {
+        let atom = Atom::new(value);
 
-        match potential_u8 {
-            Ok(byte) => CRDT {
-                value: Atom::Small(byte),
-                id: id,
-            },
-
-            Err(_e) => CRDT {
-                value: Atom::Wide(value),
-                id: id,
-            },
+        CRDT {
+            value: atom,
+            id: id,
+            peer_id: peer_id,
         }
     }
 

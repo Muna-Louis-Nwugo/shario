@@ -9,17 +9,20 @@ use std::collections::HashMap;
 // Key is (Peer_id, parent_id)
 // Value is (id, value)
 // TODO: Lowkey might need to include peer id of child as well as parent
-pub type Line = HashMap<(IdSize, IdSize), (IdSize, char)>;
+pub type Line = Vec<(IdSize, PeerIdSize, Atom)>;
 
 // Behaviours for structs representing file system or directory names
 pub trait Entry<T> {
-    fn new(file_path: String) -> Result<T>;
+    fn new(file_path: String, all_ids: Vec<u8>, this_peer_id: PeerIdSize) -> Result<T>;
 }
 
 /// Represents a file in the shar
 pub struct SharFile {
     file_path: String,
     tree: HashMap<LineSize, Line>,
+    char_counter: u32,
+    all_peer_ids: Vec<PeerIdSize>,
+    this_peer_id: PeerIdSize,
 }
 
 impl SharFile {
@@ -27,62 +30,45 @@ impl SharFile {
     fn add_file(&mut self, file_contents: String) {
         // the shar specification states that peer 0 is reserved for the char itself to add to the
         // tree as necessary
+        let mut first_line = Line::new();
+        first_line.push((0, 0, Atom::new(0 as char)));
+        self.char_counter += 1;
 
-        for (i, c) in file_contents.char_indices() {
-            // every id starts from one
-            let id = (i % (ANCHOR_LENGTH)) as u8 + 1;
-            let val = c;
+        let mut line_count = 0;
 
-            let crdt = CRDT::new(val, id);
+        self.tree.insert(line_count, first_line);
 
-            self.add_crdt(crdt);
+        for (_i, c) in file_contents.char_indices() {
+            if c == '\n' {
+                line_count += 1;
+                let mut new_line = Line::new();
+                new_line.push((self.char_counter, 0, Atom::new('\n')));
+                self.char_counter += 1;
+                self.tree.insert(line_count, new_line);
+            } else if c == '\r' {
+                line_count += 1;
+                let mut new_line = Line::new();
+                new_line.push((self.char_counter, 0, Atom::new('\r')));
+                self.char_counter += 1;
+                self.tree.insert(line_count, new_line);
+            } else {
+                let current_line = self.tree.get_mut(&line_count).unwrap();
+                current_line.push((self.char_counter, self.this_peer_id, Atom::new(c)));
+            }
         }
     }
 
     /// Adds a CRDT to the tree.
-    ///
-    /// While this is a public function, it is recommended to use standard "add" methods to add new
-    /// values accoring to supported IDE specifications.
-    pub fn add_crdt(&mut self, mut crdt: CRDT) {
-        let val = crdt.value;
-        let id = crdt.id;
-
-        // try and get the anchor from the HashMap
-        let anchor_map = self.tree.get_mut(&anchor_id);
-
-        match anchor_map {
-            // if the key existed, then just add a CRDT
-            Some(anchor) => {
-                // if there is still space in that anchor, add it
-                if anchor.values().collect::<Vec<_>>().len() <= 250 {
-                    anchor.insert((peer_id, parent_id), (id, val));
-                } else {
-                    //TODO: properly pass this into the next iteration
-                    crdt.anchor_id += 1;
-                    self.create_anchor(&crdt);
-                }
-            }
-            // if the key doesn't exist, make it
-            None => {
-                self.create_anchor(&crdt);
-            }
-        };
-    }
-
-    fn create_anchor(&mut self, crdt: &CRDT) {
-        let val = crdt.value;
-        let id = crdt.id;
-
-        self.tree.insert(
-            anchor_id,
-            HashMap::from([((peer_id, parent_id), (id, val))]),
-        );
-    }
+    pub fn add_crdt(&mut self, mut crdt: CRDT) {}
 }
 
 impl Entry<SharFile> for SharFile {
     // TODO: Tree traversal to reconstruct file
-    fn new(file_path: String) -> Result<Self> {
+    fn new(
+        file_path: String,
+        all_peer_ids: Vec<PeerIdSize>,
+        this_peer_id: PeerIdSize,
+    ) -> Result<Self> {
         let file = std::fs::read_to_string(&file_path);
 
         match file {
@@ -91,6 +77,9 @@ impl Entry<SharFile> for SharFile {
                 let mut shar_file = SharFile {
                     file_path: file_path,
                     tree: HashMap::new(),
+                    char_counter: 0,
+                    all_peer_ids: all_peer_ids,
+                    this_peer_id: this_peer_id,
                 };
 
                 // it's okay to ignore the Error that could occur here because we're performing the
@@ -140,9 +129,13 @@ pub struct SharDirectory {
     sub_files: Vec<SharFile>,
 }
 
-impl Entry for SharDirectory {
+impl Entry<SharDirectory> for SharDirectory {
     /// Doesn't yet support symlinks anywhere in the tree being initialized
-    fn new(dir_path: String) -> Result<Self> {
+    fn new(
+        dir_path: String,
+        all_peer_ids: Vec<PeerIdSize>,
+        this_peer_id: PeerIdSize,
+    ) -> Result<Self> {
         let entries = std::fs::read_dir(&dir_path);
         let mut sub_dir_vector = Vec::new();
         let mut sub_file_vector = Vec::new();
@@ -160,11 +153,18 @@ impl Entry for SharDirectory {
                     let entry_type = entry.file_type()?;
                     // if it's a directory, recursively create a new SharDir
                     if entry_type.is_dir() {
-                        sub_dir_vector
-                            .push(Self::new(String::from(entry.path().to_str().unwrap()))?);
+                        sub_dir_vector.push(Self::new(
+                            String::from(entry.path().to_str().unwrap()),
+                            all_peer_ids,
+                            this_peer_id,
+                        )?);
                     } else if entry_type.is_file() {
                         print!("File was found \n");
-                        let file = SharFile::new(entry.path().to_str().unwrap())?;
+                        let file = SharFile::new(
+                            String::from(entry.path().to_str().unwrap()),
+                            all_peer_ids,
+                            this_peer_id,
+                        )?;
 
                         sub_file_vector.push(file);
                     }

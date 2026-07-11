@@ -14,6 +14,8 @@ pub type Line = Vec<(IdSize, PeerIdSize, Atom)>;
 // Behaviours for structs representing file system or directory names
 pub trait Entry<T> {
     fn new(file_path: String, all_ids: Vec<u8>, this_peer_id: PeerIdSize) -> Result<T>;
+
+    fn add_crdt(&mut self, crdt: CRDT);
 }
 
 /// Represents a file in the shar
@@ -58,9 +60,6 @@ impl SharFile {
             }
         }
     }
-
-    /// Adds a CRDT to the tree.
-    pub fn add_crdt(&mut self, mut crdt: CRDT) {}
 }
 
 impl Entry<SharFile> for SharFile {
@@ -96,6 +95,8 @@ impl Entry<SharFile> for SharFile {
             )),
         }
     }
+    /// Adds a CRDT to the tree.
+    fn add_crdt(&mut self, mut crdt: CRDT) {}
 }
 
 impl fmt::Display for SharFile {
@@ -182,6 +183,8 @@ impl Entry<SharDirectory> for SharDirectory {
             )),
         }
     }
+
+    fn add_crdt(&mut self, crdt: CRDT) {}
 }
 
 impl fmt::Display for SharDirectory {

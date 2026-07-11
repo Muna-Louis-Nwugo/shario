@@ -36,6 +36,7 @@ pub type LineSize = u16;
 ///
 /// The Shar will attempt to store the value in a single byte, and if that's impossible, it will
 /// fall back to a char
+#[derive(Debug, Clone, Copy)]
 pub enum Atom {
     Small(u8),
     Wide(char),

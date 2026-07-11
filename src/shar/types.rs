@@ -54,29 +54,17 @@ impl CRDT {
     /// [4 bytes]   [1 byte]    [1 byte]        [2 bytes]       [1 byte]
     ///
     /// Yes, I know it's not memory aligned.  Boo hoo.
-    pub fn to_bytes(self) -> [u8; 9] {
+    pub fn to_bytes(self) -> [Atom; 9] {
         // initialize byte array
-        let mut byte_array: [u8; 9] = [0; 9];
+        let mut byte_array: [Atom; 9] = [Atom::Small(0); 9];
 
         // turn value into 4-byte array and move to byte_array
-        let value: [u8; 4];
+        let value: Atom = self.value;
 
-        match self.value {
-            Atom::Small(a) => {
-                value = (a as u32).to_be_bytes();
-            }
-
-            Atom::Wide(b) => {
-                value = (b as u32).to_be_bytes();
-            }
-        }
-
-        for (i, val) in value.into_iter().enumerate() {
-            byte_array[i] = val;
-        }
+        byte_array[0] = value;
 
         // copy ID and parent_id into byte_array
-        byte_array[4] = self.id;
+        byte_array[4] = Atom::Wide(char::from_u32(self.id).unwrap());
 
         byte_array
     }
@@ -103,15 +91,20 @@ impl Operation {
     ///Converts operations into bytes:
     ///
     ///[crdt] [operation_type]
-    pub fn to_bytes(self) -> [u8; 15] {
-        let send_character: [u8; 4] = [0, 0, 0, 0];
-
+    pub fn to_bytes(self) -> [Atom; 11] {
         let crdt = self.crdt.to_bytes();
+
+        let [a, b, c, d, e, f, g, h, i] = crdt;
 
         let operation_type: [u8; 2] = self.operation_type.value();
 
-        let mut output = send_character.into_iter().chain(crdt).chain(operation_type);
+        let [j, k] = [
+            Atom::new(operation_type[0] as char),
+            Atom::new(operation_type[1] as char),
+        ];
 
-        std::array::from_fn(|_| output.next().unwrap())
+        let output = [a, b, c, d, e, f, g, h, i, j, k];
+
+        output
     }
 }

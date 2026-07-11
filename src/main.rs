@@ -1,13 +1,15 @@
 mod messages;
 mod shar;
 
+use crate::shar::core::tree::Entry;
+use crate::shar::prelude::*;
+
 use std::sync::mpsc;
 use std::thread;
 
 use axum::{Router, routing::get};
 use clap::{Parser, Subcommand};
 use pollster::block_on;
-use serde_json::Value;
 use socketioxide::{
     SocketIo,
     extract::{Data, SocketRef},
@@ -16,7 +18,7 @@ use tower::ServiceBuilder;
 use tower_http::cors::CorsLayer;
 
 use crate::messages::InputMessage;
-use crate::messages::{InputCommand, MessageIn, MessageOut};
+use crate::messages::{MessageIn, MessageOut};
 use crate::shar::core::buffer::SharBuffer;
 use crate::shar::core::queue::SharQueue;
 use crate::shar::core::tree::SharDirectory;
@@ -177,15 +179,17 @@ impl SharInputer {
 async fn initialize_shar(
     session_id: u32,
     directory_path: String,
-) -> Result<(SharDirectory, SharQueue, SharBuffer), error::Error> {
+) -> Result<(SharDirectory, SharQueue, SharBuffer)> {
     let _ = session_id;
     let _ = directory_path;
 
-    let dir = SharDirectory::new(directory_path)?;
+    let mut dummy_ids = Vec::new();
+    dummy_ids.push(0);
+    let dir = SharDirectory::new(directory_path.clone(), dummy_ids.clone(), 0)?;
 
     let buff = SharBuffer::new().await?;
 
-    let queue = SharQueue::new();
+    let queue = SharQueue::new(directory_path.clone(), dummy_ids.clone(), 0)?;
 
     Ok((dir, queue, buff))
 }

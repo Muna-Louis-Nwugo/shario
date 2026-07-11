@@ -17,6 +17,7 @@ pub trait Entry<T> {
 }
 
 /// Represents a file in the shar
+#[derive(Debug, Clone)]
 pub struct SharFile {
     file_path: String,
     tree: HashMap<LineSize, Line>,
@@ -111,8 +112,8 @@ impl fmt::Display for SharFile {
             for crdt in anchor {
                 write!(
                     f,
-                    "Peer_id: {}; parent_id: {}; id: {}; value: {} \n",
-                    crdt.0.0, crdt.0.1, crdt.1.0, crdt.1.1
+                    "id: {}; peer_id: {}; value: {:?}; \n",
+                    crdt.0, crdt.1, crdt.2
                 )?;
             }
             anchor_id += 1;
@@ -155,14 +156,14 @@ impl Entry<SharDirectory> for SharDirectory {
                     if entry_type.is_dir() {
                         sub_dir_vector.push(Self::new(
                             String::from(entry.path().to_str().unwrap()),
-                            all_peer_ids,
+                            all_peer_ids.clone(),
                             this_peer_id,
                         )?);
                     } else if entry_type.is_file() {
                         print!("File was found \n");
                         let file = SharFile::new(
                             String::from(entry.path().to_str().unwrap()),
-                            all_peer_ids,
+                            all_peer_ids.clone(),
                             this_peer_id,
                         )?;
 

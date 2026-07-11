@@ -1,21 +1,32 @@
-use crate::shar::{core::tree::SharDirectory, types::Operation};
+use crate::prelude::*;
+use crate::shar::{core::tree::Entry, core::tree::SharDirectory, types::Operation};
 use std::collections::VecDeque;
 /* The Shar operation queue */
 
 pub struct SharQueue {
     local_queue: VecDeque<Operation>,
     network_queue: VecDeque<Operation>,
+    this_id: PeerIdSize,
+    all_ids: Vec<PeerIdSize>,
     tree: SharDirectory,
 }
 
 impl SharQueue {
-    pub fn new() -> Self {
+    pub fn new(
+        dir_path: String,
+        all_peer_ids: Vec<PeerIdSize>,
+        this_peer_id: PeerIdSize,
+    ) -> Result<Self> {
         /* create a new shar queue*/
-        SharQueue {
+        let queue = SharQueue {
             local_queue: VecDeque::new(),
             network_queue: VecDeque::new(),
-            tree: SharDirectory::new(),
-        }
+            this_id: this_peer_id,
+            all_ids: all_peer_ids.clone(),
+            tree: SharDirectory::new(dir_path, all_peer_ids, this_peer_id)?,
+        };
+
+        Ok(queue)
     }
 
     pub fn add_operation(&mut self, operation: Operation) {

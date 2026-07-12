@@ -1,6 +1,7 @@
 use crate::prelude::*;
 use crate::shar::{core::tree::Entry, core::tree::SharDirectory, types::Operation};
 use std::collections::VecDeque;
+use std::path::PathBuf;
 /* The Shar operation queue */
 
 pub struct SharQueue {
@@ -13,7 +14,7 @@ pub struct SharQueue {
 
 impl SharQueue {
     pub fn new(
-        dir_path: String,
+        dir_path: PathBuf,
         all_peer_ids: Vec<PeerIdSize>,
         this_peer_id: PeerIdSize,
     ) -> Result<Self> {

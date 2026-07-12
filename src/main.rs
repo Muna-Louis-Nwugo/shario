@@ -4,6 +4,7 @@ mod shar;
 use crate::shar::core::tree::Entry;
 use crate::shar::prelude::*;
 
+use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread;
 
@@ -39,7 +40,7 @@ struct Shar {
 enum SharCommand {
     Init {
         session_id: u32,
-        directory_path: String,
+        directory_path: PathBuf,
     },
 }
 
@@ -178,7 +179,7 @@ impl SharInputer {
 // supporting functions
 async fn initialize_shar(
     session_id: u32,
-    directory_path: String,
+    directory_path: PathBuf,
 ) -> Result<(SharDirectory, SharQueue, SharBuffer)> {
     let _ = session_id;
     let _ = directory_path;

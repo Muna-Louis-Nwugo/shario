@@ -4,6 +4,7 @@ use std::fmt;
 use crate::shar::error::Error;
 use crate::shar::prelude::*;
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 // Represents an anchor. Each node is a decomposed CRDT
 // Key is (Peer_id, parent_id)
@@ -13,7 +14,7 @@ pub type Line = Vec<(IdSize, PeerIdSize, Atom)>;
 
 // Behaviours for structs representing file system or directory names
 pub trait Entry<T> {
-    fn new(file_path: String, all_ids: Vec<u8>, this_peer_id: PeerIdSize) -> Result<T>;
+    fn new(file_path: PathBuf, all_ids: Vec<u8>, this_peer_id: PeerIdSize) -> Result<T>;
 
     fn add_crdt(&mut self, crdt: CRDT);
 }
@@ -21,7 +22,7 @@ pub trait Entry<T> {
 /// Represents a file in the shar
 #[derive(Debug, Clone)]
 pub struct SharFile {
-    file_path: String,
+    file_path: PathBuf,
     tree: HashMap<LineSize, Line>,
     char_counter: u32,
     all_peer_ids: Vec<PeerIdSize>,
@@ -65,7 +66,7 @@ impl SharFile {
 impl Entry<SharFile> for SharFile {
     // TODO: Tree traversal to reconstruct file
     fn new(
-        file_path: String,
+        file_path: PathBuf,
         all_peer_ids: Vec<PeerIdSize>,
         this_peer_id: PeerIdSize,
     ) -> Result<Self> {
@@ -102,7 +103,7 @@ impl Entry<SharFile> for SharFile {
 impl fmt::Display for SharFile {
     fn fmt(&self, f: &mut fmt::Formatter) -> std::result::Result<(), std::fmt::Error> {
         // write_out the file path
-        write!(f, "{}\n", self.file_path)?;
+        write!(f, "{}\n", self.file_path.display())?;
 
         let crdt_tree = self.tree.clone();
         let mut anchor_id = 0;
@@ -126,7 +127,7 @@ impl fmt::Display for SharFile {
 
 /// Rerpresents a directory in the shar
 pub struct SharDirectory {
-    dir_name: String,
+    dir_name: PathBuf,
     sub_dir: Vec<SharDirectory>,
     sub_files: Vec<SharFile>,
 }
@@ -134,7 +135,7 @@ pub struct SharDirectory {
 impl Entry<SharDirectory> for SharDirectory {
     /// Doesn't yet support symlinks anywhere in the tree being initialized
     fn new(
-        dir_path: String,
+        dir_path: PathBuf,
         all_peer_ids: Vec<PeerIdSize>,
         this_peer_id: PeerIdSize,
     ) -> Result<Self> {
@@ -147,23 +148,20 @@ impl Entry<SharDirectory> for SharDirectory {
                 // Recursively call new() on children. If the current entry is a file, create the
                 // file's CRDT tree
 
-                // NOTE: this uses to_str.unwrap which will crash on non UTF-8 characters
-                // TODO: allow this to be used on paths containing non-UTF8 characters. This is not
-                // a very high priority task, but it should be done to provide maximum flexibility
                 for entry in entries {
                     let entry = entry?;
                     let entry_type = entry.file_type()?;
                     // if it's a directory, recursively create a new SharDir
                     if entry_type.is_dir() {
                         sub_dir_vector.push(Self::new(
-                            String::from(entry.path().to_str().unwrap()),
+                            entry.path(),
                             all_peer_ids.clone(),
                             this_peer_id,
                         )?);
                     } else if entry_type.is_file() {
                         print!("File was found \n");
                         let file = SharFile::new(
-                            String::from(entry.path().to_str().unwrap()),
+                            entry.path(),
                             all_peer_ids.clone(),
                             this_peer_id,
                         )?;
@@ -172,7 +170,7 @@ impl Entry<SharDirectory> for SharDirectory {
                     }
                 }
                 Ok(SharDirectory {
-                    dir_name: String::from(&dir_path),
+                    dir_name: dir_path,
                     sub_dir: sub_dir_vector,
                     sub_files: sub_file_vector,
                 })
@@ -190,7 +188,7 @@ impl Entry<SharDirectory> for SharDirectory {
 impl fmt::Display for SharDirectory {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // print the name of this directory
-        write!(f, "{}\n", self.dir_name)?;
+        write!(f, "{}\n", self.dir_name.display())?;
 
         // print the subfiles
         let files = &self.sub_files;

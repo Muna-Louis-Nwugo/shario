@@ -97,7 +97,7 @@ impl Entry<SharFile> for SharFile {
         }
     }
     /// Adds a CRDT to the tree.
-    fn add_crdt(&mut self, mut crdt: CRDT) {}
+    fn add_crdt(&mut self, _crdt: CRDT) {}
 }
 
 impl fmt::Display for SharFile {
@@ -182,7 +182,7 @@ impl Entry<SharDirectory> for SharDirectory {
         }
     }
 
-    fn add_crdt(&mut self, crdt: CRDT) {}
+    fn add_crdt(&mut self, _crdt: CRDT) {}
 }
 
 impl fmt::Display for SharDirectory {

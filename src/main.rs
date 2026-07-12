@@ -23,7 +23,6 @@ use crate::messages::{MessageIn, MessageOut};
 use crate::shar::core::buffer::SharBuffer;
 use crate::shar::core::queue::SharQueue;
 use crate::shar::core::tree::SharDirectory;
-use crate::shar::error;
 use crate::shar::prelude;
 
 /// Shar CLI

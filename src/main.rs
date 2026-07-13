@@ -185,7 +185,7 @@ async fn initialize_shar(
 
     let mut dummy_ids = Vec::new();
     dummy_ids.push(0);
-    let dir = SharDirectory::new(directory_path.clone(), dummy_ids.clone(), 0)?;
+    let dir = SharDirectory::new(directory_path.clone())?;
 
     let buff = SharBuffer::new().await?;
 

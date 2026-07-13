@@ -24,7 +24,7 @@ impl SharQueue {
             network_queue: VecDeque::new(),
             this_id: this_peer_id,
             all_ids: all_peer_ids.clone(),
-            tree: SharDirectory::new(dir_path, all_peer_ids, this_peer_id)?,
+            tree: SharDirectory::new(dir_path)?,
         };
 
         Ok(queue)

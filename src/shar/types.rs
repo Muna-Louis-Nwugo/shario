@@ -30,6 +30,7 @@ impl OperationType {
 ///
 /// value: Atom -> the value of this specific character
 /// id: u8 -> the id of this specific character
+#[derive(Clone, Debug)]
 pub struct CRDT {
     pub value: Atom,
     pub id: IdSize,

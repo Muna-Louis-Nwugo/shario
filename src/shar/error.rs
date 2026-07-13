@@ -17,4 +17,7 @@ pub enum Error {
 
     #[error("UnknownOrigin: {0}")]
     UnknownOrigin(String),
+
+    #[error("OutOfBounds: {0}")]
+    OutOfBounds(String),
 }

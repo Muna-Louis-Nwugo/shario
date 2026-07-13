@@ -1,4 +1,5 @@
 //! Contains character tree that manages local state
+use core::num;
 use std::fmt;
 
 use axum::extract::Path;
@@ -18,7 +19,13 @@ pub type Line = Vec<(IdSize, PeerIdSize, Atom)>;
 pub trait Entry<T> {
     fn new(file_path: PathBuf) -> Result<T>;
 
-    fn add_crdt(&mut self, crdt: &CRDT, file_path: &PathBuf, line_num: LineSize, parent: IdSize);
+    fn add_crdt(
+        &mut self,
+        crdt: &CRDT,
+        file_path: &PathBuf,
+        line_num: LineSize,
+        parent: IdSize,
+    ) -> Result<()>;
 }
 
 /// Represents a file in the shar
@@ -63,6 +70,20 @@ impl SharFile {
             }
         }
     }
+    fn check_line(&self, line_number: LineSize, parent_id: IdSize) -> Result<Option<usize>> {
+        let line = &self.tree[&line_number];
+        let mut parent_index = None;
+
+        for (pos, element) in line.iter().enumerate() {
+            if element.0 == parent_id {
+                parent_index = Some(pos);
+
+                break;
+            }
+        }
+
+        Ok(parent_index)
+    }
 }
 
 impl Entry<SharFile> for SharFile {
@@ -99,18 +120,51 @@ impl Entry<SharFile> for SharFile {
         file_path: &PathBuf,
         mut line_number: LineSize,
         parent_id: IdSize,
-    ) {
+    ) -> Result<()> {
+        // TODO:  Add support for special cases such as new line and remove line
+
         // iterate through the line to find the parent_id
         let mut parent_index: Option<usize> = None;
 
-        let line = &self.tree[&line_number];
+        let mut distance_from_og = 0;
+        let mut num_errors = 0;
 
-        for (pos, element) in line.iter().enumerate() {
-            if element.0 == parent_id {
-                parent_index = Some(pos);
-
-                break;
+        // looks through the entire fire to find the CRDT, starting from the assumed line
+        while parent_index.is_none() {
+            if num_errors >= 2 {
+                return Err(Error::OutOfBounds(String::from("Parent does not exist")));
             }
+            let check_forward = self.check_line(line_number + distance_from_og, parent_id);
+
+            match check_forward {
+                Ok(result) => {
+                    if !result.is_none() {
+                        parent_index = result;
+                    }
+                }
+
+                Err(_e) => {
+                    num_errors += 1;
+                }
+            }
+
+            if parent_index.is_none() {
+                let check_backward = self.check_line(line_number - distance_from_og, parent_id);
+
+                match check_backward {
+                    Ok(result) => {
+                        if !result.is_none() {
+                            parent_index = result;
+                        }
+                    }
+
+                    Err(_e) => {
+                        num_errors += 1;
+                    }
+                }
+            }
+
+            distance_from_og += 1;
         }
 
         if parent_index.is_none() {
@@ -147,6 +201,8 @@ impl Entry<SharFile> for SharFile {
                 };
             }
         }
+
+        Ok(())
     }
 }
 
@@ -220,7 +276,15 @@ impl Entry<SharDirectory> for SharDirectory {
         }
     }
 
-    fn add_crdt(&mut self, crdt: &CRDT, file_path: &PathBuf, line_num: LineSize, parent: IdSize) {}
+    fn add_crdt(
+        &mut self,
+        crdt: &CRDT,
+        file_path: &PathBuf,
+        line_num: LineSize,
+        parent: IdSize,
+    ) -> Result<()> {
+        Ok(())
+    }
 }
 
 impl fmt::Display for SharDirectory {

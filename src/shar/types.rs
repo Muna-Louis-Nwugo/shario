@@ -65,7 +65,13 @@ impl CRDT {
         byte_array[0] = value;
 
         // copy ID and parent_id into byte_array
-        byte_array[4] = Atom::Wide(char::from_u32(self.id).unwrap());
+        let id_array = self.id.to_be_bytes();
+        let mut n = 4;
+
+        for byte in id_array {
+            byte_array[n] = Atom::Small(byte);
+            n += 1;
+        }
 
         byte_array
     }

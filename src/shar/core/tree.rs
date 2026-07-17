@@ -71,7 +71,10 @@ impl SharFile {
         }
     }
     fn check_line(&self, line_number: LineSize, parent_id: IdSize) -> Result<Option<usize>> {
-        let line = &self.tree[&line_number];
+        let line = self
+            .tree
+            .get(&line_number)
+            .ok_or(Error::OutOfBounds(String::from("Line out of bounds")))?;
         let mut parent_index = None;
 
         for (pos, element) in line.iter().enumerate() {
@@ -149,6 +152,10 @@ impl Entry<SharFile> for SharFile {
             }
 
             if parent_index.is_none() {
+                if distance_from_og > line_number {
+                    continue;
+                }
+
                 let check_backward = self.check_line(line_number - distance_from_og, parent_id);
 
                 match check_backward {
@@ -167,42 +174,39 @@ impl Entry<SharFile> for SharFile {
             distance_from_og += 1;
         }
 
-        if parent_index.is_none() {
-            // send of to recursively check above and below line until it's found
-            // TODO: Make this actually perform properly recursively
-            line_number += 1;
-            self.add_crdt(crdt, file_path, line_number, parent_id);
-        }
-
         let (id, peer_id, val) = (crdt.id, crdt.peer_id, crdt.value);
 
-        //check what's already there
-        let already_there = self.tree[&line_number][parent_index.unwrap_or(0) + 1];
+        // if the parent is the last in its line, just insert this at the end
+        if parent_index >= Some(self.tree[&line_number].len()) {
+            if let Some(line) = self.tree.get_mut(&line_number) {
+                line.push((id, peer_id, val));
+            };
 
-        // if the conter id value is larger, then it wins
-        if already_there.0 > id {
-            if let Some(line) = self.tree.get_mut(&line_number) {
-                line.insert(parent_index.unwrap_or(0) + 2, (id, peer_id, val));
-            };
-        } else if id > already_there.0 {
-            if let Some(line) = self.tree.get_mut(&line_number) {
-                line.insert(parent_index.unwrap_or(0) + 1, (id, peer_id, val));
-            };
+            Ok(())
         } else {
-            // if both of the ids are the same, the one with the smaller peer_id wins. This favours
-            // those who joined the session earlier
-            if already_there.1 < peer_id {
-                if let Some(line) = self.tree.get_mut(&line_number) {
-                    line.insert(parent_index.unwrap_or(0) + 2, (id, peer_id, val));
-                };
-            } else if peer_id < already_there.1 {
-                if let Some(line) = self.tree.get_mut(&line_number) {
-                    line.insert(parent_index.unwrap_or(0) + 1, (id, peer_id, val));
-                };
-            }
-        }
+            //check what's already there
+            let already_there = self.tree[&line_number][parent_index.unwrap_or(0) + 1];
 
-        Ok(())
+            // if the conter id value is larger, then it wins
+
+            if let Some(line) = self.tree.get_mut(&line_number) {
+                if already_there.0 > id {
+                    line.insert(parent_index.unwrap_or(0) + 2, (id, peer_id, val));
+                } else if id > already_there.0 {
+                    line.insert(parent_index.unwrap_or(0) + 1, (id, peer_id, val));
+                } else {
+                    // if both of the ids are the same, the one with the smaller peer_id wins. This favours
+                    // those who joined the session earlier
+                    if already_there.1 < peer_id {
+                        line.insert(parent_index.unwrap_or(0) + 2, (id, peer_id, val));
+                    } else if peer_id < already_there.1 {
+                        line.insert(parent_index.unwrap_or(0) + 1, (id, peer_id, val));
+                    }
+                }
+            }
+
+            Ok(())
+        }
     }
 }
 

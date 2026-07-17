@@ -1,10 +1,6 @@
 //! Contains character tree that manages local state
-use core::num;
 use std::fmt;
 
-use axum::extract::Path;
-
-use crate::shar::error::Error;
 use crate::shar::prelude::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -126,8 +122,8 @@ impl Entry<SharFile> for SharFile {
     fn add_crdt(
         &mut self,
         crdt: &CRDT,
-        file_path: &PathBuf,
-        mut line_number: LineSize,
+        _file_path: &PathBuf,
+        line_number: LineSize,
         parent_id: IdSize,
     ) -> Result<()> {
         // TODO:  Add support for special cases such as new line and remove line
@@ -295,10 +291,10 @@ impl Entry<SharDirectory> for SharDirectory {
 
     fn add_crdt(
         &mut self,
-        crdt: &CRDT,
-        file_path: &PathBuf,
-        line_num: LineSize,
-        parent: IdSize,
+        _crdt: &CRDT,
+        _file_path: &PathBuf,
+        _line_num: LineSize,
+        _parent: IdSize,
     ) -> Result<()> {
         Ok(())
     }

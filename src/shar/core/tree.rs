@@ -13,7 +13,13 @@ use std::path::PathBuf;
 // Key is (Peer_id, parent_id)
 // Value is (id, value)
 // TODO: Lowkey might need to include peer id of child as well as parent
-pub type Line = Vec<(IdSize, PeerIdSize, Atom)>;
+pub type Line = Vec<(IdSize, PeerIdSize, Value)>;
+
+/// Encodes a single character to its UTF-8 bytes (one char per node).
+fn char_bytes(c: char) -> Value {
+    let mut buf = [0u8; 4];
+    c.encode_utf8(&mut buf).as_bytes().to_vec()
+}
 
 // Behaviours for structs representing file system or directory names
 pub trait Entry<T> {
@@ -42,7 +48,7 @@ impl SharFile {
         // the shar specification states that peer 0 is reserved for the char itself to add to the
         // tree as necessary
         let mut first_line = Line::new();
-        first_line.push((0, 0, Atom::new(0 as char)));
+        first_line.push((0, 0, char_bytes(0 as char)));
         self.char_counter += 1;
 
         let mut line_count = 0;
@@ -53,20 +59,20 @@ impl SharFile {
             if c == '\n' {
                 line_count += 1;
                 let mut new_line = Line::new();
-                new_line.push((self.char_counter, 0, Atom::new('\n')));
+                new_line.push((self.char_counter, 0, char_bytes('\n')));
                 self.char_counter += 1;
                 self.tree.insert(line_count, new_line);
             } else if c == '\r' {
                 line_count += 1;
                 let mut new_line = Line::new();
-                new_line.push((self.char_counter, 0, Atom::new('\r')));
+                new_line.push((self.char_counter, 0, char_bytes('\r')));
                 self.char_counter += 1;
                 self.tree.insert(line_count, new_line);
             } else {
                 let current_line = self.tree.get_mut(&line_count).unwrap();
                 // when adding a file, it just uses the peer_id of 0. smallest possible peer_id,
                 // meaning that the file's original state is always what gets preference
-                current_line.push((self.char_counter, 0, Atom::new(c)));
+                current_line.push((self.char_counter, 0, char_bytes(c)));
             }
         }
     }
@@ -153,6 +159,9 @@ impl Entry<SharFile> for SharFile {
 
             if parent_index.is_none() {
                 if distance_from_og > line_number {
+                    // inrememnt one to continue checking forward, but stop here so we don't
+                    // underflow
+                    distance_from_og += 1;
                     continue;
                 }
 
@@ -174,32 +183,34 @@ impl Entry<SharFile> for SharFile {
             distance_from_og += 1;
         }
 
-        let (id, peer_id, val) = (crdt.id, crdt.peer_id, crdt.value);
+        let (id, peer_id, val) = (crdt.id, crdt.peer_id, crdt.value.clone());
 
         // if the parent is the last in its line, just insert this at the end
-        if parent_index >= Some(self.tree[&line_number].len()) {
+        if parent_index >= Some(self.tree[&line_number].len() - 1) {
             if let Some(line) = self.tree.get_mut(&line_number) {
                 line.push((id, peer_id, val));
             };
 
             Ok(())
         } else {
-            //check what's already there
-            let already_there = self.tree[&line_number][parent_index.unwrap_or(0) + 1];
+            // check what's already sitting after the parent. Only the id and peer_id
+            // matter for ordering, and both are Copy, so we don't hold a borrow of the value
+            let successor = &self.tree[&line_number][parent_index.unwrap_or(0) + 1];
+            let (other_id, other_peer) = (successor.0, successor.1);
 
-            // if the conter id value is larger, then it wins
+            // if the counter id value is larger, then it wins
 
             if let Some(line) = self.tree.get_mut(&line_number) {
-                if already_there.0 > id {
+                if other_id > id {
                     line.insert(parent_index.unwrap_or(0) + 2, (id, peer_id, val));
-                } else if id > already_there.0 {
+                } else if id > other_id {
                     line.insert(parent_index.unwrap_or(0) + 1, (id, peer_id, val));
                 } else {
                     // if both of the ids are the same, the one with the smaller peer_id wins. This favours
                     // those who joined the session earlier
-                    if already_there.1 < peer_id {
+                    if other_peer < peer_id {
                         line.insert(parent_index.unwrap_or(0) + 2, (id, peer_id, val));
-                    } else if peer_id < already_there.1 {
+                    } else if peer_id < other_peer {
                         line.insert(parent_index.unwrap_or(0) + 1, (id, peer_id, val));
                     }
                 }
@@ -225,7 +236,9 @@ impl<'a> fmt::Display for SharFile {
                 write!(
                     f,
                     "id: {}; peer_id: {}; value: {:?}; \n",
-                    crdt.0, crdt.1, crdt.2
+                    crdt.0,
+                    crdt.1,
+                    String::from_utf8_lossy(&crdt.2)
                 )?;
             }
             anchor_id += 1;

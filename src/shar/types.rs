@@ -28,11 +28,11 @@ impl OperationType {
 /// Represents the chosen CRDT: Replicated Growable Array. Anchors are used to bound tree traversal
 /// and keep the footprint of the CRDT as small as possible for serialization
 ///
-/// value: Atom -> the value of this specific character
+/// value: Value -> the UTF-8 bytes of this specific character (one char per node)
 /// id: u8 -> the id of this specific character
 #[derive(Clone, Debug)]
 pub struct CRDT {
-    pub value: Atom,
+    pub value: Value,
     pub id: IdSize,
     pub peer_id: PeerIdSize,
 }
@@ -40,40 +40,36 @@ pub struct CRDT {
 impl CRDT {
     /// Creates a new CRDT
     pub fn new(value: char, id: IdSize, peer_id: PeerIdSize) -> Self {
-        let atom = Atom::new(value);
+        // one character per node: store its UTF-8 bytes (1-4 bytes)
+        let mut buf = [0u8; 4];
+        let bytes = value.encode_utf8(&mut buf).as_bytes().to_vec();
 
         CRDT {
-            value: atom,
+            value: bytes,
             id: id,
             peer_id: peer_id,
         }
     }
 
-    /// Serializes a CRDT into bytes as follows:
+    /// Serializes a CRDT into a length-prefixed, big-endian byte layout:
     ///
-    /// [value]     [id]        [parent_id]     [anchor_id]     [peer_id]
-    /// [4 bytes]   [1 byte]    [1 byte]        [2 bytes]       [1 byte]
+    /// [value_len]  [value]              [id]        [peer_id]
+    /// [1 byte]     [value_len bytes]    [4 bytes]   [1 byte]
     ///
-    /// Yes, I know it's not memory aligned.  Boo hoo.
-    pub fn to_bytes(self) -> [Atom; 9] {
-        // initialize byte array
-        let mut byte_array: [Atom; 9] = [Atom::Small(0); 9];
+    /// `value` is the raw UTF-8 bytes of the character (1-4 bytes for a single
+    /// Unicode scalar), so the value section is byte-identical on every machine.
+    /// `id` is written big-endian. A single scalar is at most 4 bytes, so the
+    /// 1-byte length prefix is always sufficient.
+    pub fn to_bytes(self) -> Vec<u8> {
+        // 1 length byte + value + 4-byte id + 1-byte peer_id
+        let mut output = Vec::with_capacity(1 + self.value.len() + 5);
 
-        // turn value into 4-byte array and move to byte_array
-        let value: Atom = self.value;
+        output.push(self.value.len() as u8);
+        output.extend_from_slice(&self.value);
+        output.extend_from_slice(&self.id.to_be_bytes());
+        output.push(self.peer_id);
 
-        byte_array[0] = value;
-
-        // copy ID and parent_id into byte_array
-        let id_array = self.id.to_be_bytes();
-        let mut n = 4;
-
-        for byte in id_array {
-            byte_array[n] = Atom::Small(byte);
-            n += 1;
-        }
-
-        byte_array
+        output
     }
 }
 
@@ -97,20 +93,11 @@ impl Operation {
 
     ///Converts operations into bytes:
     ///
-    ///[crdt] [operation_type]
-    pub fn to_bytes(self) -> [Atom; 11] {
-        let crdt = self.crdt.to_bytes();
-
-        let [a, b, c, d, e, f, g, h, i] = crdt;
-
-        let operation_type: [u8; 2] = self.operation_type.value();
-
-        let [j, k] = [
-            Atom::new(operation_type[0] as char),
-            Atom::new(operation_type[1] as char),
-        ];
-
-        let output = [a, b, c, d, e, f, g, h, i, j, k];
+    ///[crdt]              [operation_type]
+    ///[length-prefixed]   [2 bytes]
+    pub fn to_bytes(self) -> Vec<u8> {
+        let mut output = self.crdt.to_bytes();
+        output.extend_from_slice(&self.operation_type.value());
 
         output
     }

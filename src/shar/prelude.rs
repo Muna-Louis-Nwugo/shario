@@ -29,27 +29,7 @@ pub type PeerIdSize = u8;
 
 pub type LineSize = u16;
 
-/// The two possible character sizes.
-///
-/// Small: u8 - a single byte character
-/// Wide: char - a 4 byte character
-///
-/// The Shar will attempt to store the value in a single byte, and if that's impossible, it will
-/// fall back to a char
-#[derive(Debug, Clone, Copy)]
-pub enum Atom {
-    Small(u8),
-    Wide(char),
-}
-
-impl Atom {
-    pub fn new(character: char) -> Atom {
-        let potential_u8 = u8::try_from(character);
-
-        match potential_u8 {
-            Ok(byte) => Atom::Small(byte),
-
-            Err(_e) => Atom::Wide(character),
-        }
-    }
-}
+/// The value of a single node: the UTF-8 bytes of one character (1-4 bytes for a
+/// single Unicode scalar). Raw bytes have no endianness, so a value is identical
+/// on every machine as long as both ends agree on UTF-8.
+pub type Value = Vec<u8>;

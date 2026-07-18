@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 // Represents an anchor. Each node is a decomposed CRDT
-// Key is (Peer_id, parent_id)
+// Key is (peer, parent_id)
 // Value is (id, value)
 // TODO: Lowkey might need to include peer id of child as well as parent
 pub type Line = Vec<(IdSize, PeerIdSize, Value)>;
@@ -66,12 +66,13 @@ impl SharFile {
                 self.tree.insert(line_count, new_line);
             } else {
                 let current_line = self.tree.get_mut(&line_count).unwrap();
-                // when adding a file, it just uses the peer_id of 0. smallest possible peer_id,
+                // when adding a file, it just uses the peer of 0. smallest possible peer,
                 // meaning that the file's original state is always what gets preference
                 current_line.push((self.char_counter, 0, char_bytes(c)));
             }
         }
     }
+
     fn check_line(&self, line_number: LineSize, parent_id: IdSize) -> Result<Option<usize>> {
         let line = self
             .tree
@@ -179,17 +180,17 @@ impl Entry<SharFile> for SharFile {
             distance_from_og += 1;
         }
 
-        let (id, peer_id, val) = (crdt.id, crdt.peer_id, crdt.value.clone());
+        let (id, peer, val) = (crdt.id, crdt.peer, crdt.value.clone());
 
         // if the parent is the last in its line, just insert this at the end
         if parent_index >= Some(self.tree[&line_number].len() - 1) {
             if let Some(line) = self.tree.get_mut(&line_number) {
-                line.push((id, peer_id, val));
+                line.push((id, peer, val));
             };
 
             Ok(())
         } else {
-            // check what's already sitting after the parent. Only the id and peer_id
+            // check what's already sitting after the parent. Only the id and peer
             // matter for ordering, and both are Copy, so we don't hold a borrow of the value
             let successor = &self.tree[&line_number][parent_index.unwrap_or(0) + 1];
             let (other_id, other_peer) = (successor.0, successor.1);
@@ -198,16 +199,16 @@ impl Entry<SharFile> for SharFile {
 
             if let Some(line) = self.tree.get_mut(&line_number) {
                 if other_id > id {
-                    line.insert(parent_index.unwrap_or(0) + 2, (id, peer_id, val));
+                    line.insert(parent_index.unwrap_or(0) + 2, (id, peer, val));
                 } else if id > other_id {
-                    line.insert(parent_index.unwrap_or(0) + 1, (id, peer_id, val));
+                    line.insert(parent_index.unwrap_or(0) + 1, (id, peer, val));
                 } else {
-                    // if both of the ids are the same, the one with the smaller peer_id wins. This favours
+                    // if both of the ids are the same, the one with the smaller peer wins. This favours
                     // those who joined the session earlier
-                    if other_peer < peer_id {
-                        line.insert(parent_index.unwrap_or(0) + 2, (id, peer_id, val));
-                    } else if peer_id < other_peer {
-                        line.insert(parent_index.unwrap_or(0) + 1, (id, peer_id, val));
+                    if other_peer < peer {
+                        line.insert(parent_index.unwrap_or(0) + 2, (id, peer, val));
+                    } else if peer < other_peer {
+                        line.insert(parent_index.unwrap_or(0) + 1, (id, peer, val));
                     }
                 }
             }
@@ -231,7 +232,7 @@ impl<'a> fmt::Display for SharFile {
             for crdt in anchor {
                 write!(
                     f,
-                    "id: {}; peer_id: {}; value: {:?}; \n",
+                    "id: {}; peer: {}; value: {:?}; \n",
                     crdt.0,
                     crdt.1,
                     String::from_utf8_lossy(&crdt.2)

@@ -36,6 +36,7 @@ pub struct CRDT {
     pub id: IdSize,
     pub parent: IdSize,
     pub peer: PeerIdSize,
+    pub deleted: bool,
 }
 
 impl CRDT {
@@ -50,6 +51,7 @@ impl CRDT {
             id: id,
             parent: parent,
             peer: peer,
+            deleted: false,
         }
     }
 
@@ -72,6 +74,12 @@ impl CRDT {
         output.push(self.peer);
 
         output
+    }
+
+    /// Turns this CRDT into a tombstone
+
+    pub fn delete(&mut self) {
+        self.deleted = true;
     }
 }
 

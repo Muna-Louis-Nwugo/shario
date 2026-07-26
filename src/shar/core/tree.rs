@@ -5,11 +5,11 @@ use crate::shar::prelude::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-// Represents an anchor. Each node is a decomposed CRDT
-// Key is (peer, parent_id)
-// Value is (id, value)
+// A vector representation of a file's line. Each element is a decomposed CRDT in tuple form:
+//
+// (id, peer_id, value, parent_id)
 // TODO: Lowkey might need to include peer id of child as well as parent
-pub type Line = Vec<(IdSize, PeerIdSize, Value)>;
+pub type Line = Vec<(IdSize, PeerIdSize, Value, IdSize)>;
 
 /// Encodes a single character to its UTF-8 bytes (one char per node).
 fn char_bytes(c: char) -> Value {
@@ -44,7 +44,7 @@ impl SharFile {
         // the shar specification states that peer 0 is reserved for the char itself to add to the
         // tree as necessary
         let mut first_line = Line::new();
-        first_line.push((0, 0, char_bytes(0 as char)));
+        first_line.push((0, 0, char_bytes(0 as char), 0));
         self.char_counter += 1;
 
         let mut line_count = 0;
@@ -55,20 +55,32 @@ impl SharFile {
             if c == '\n' {
                 line_count += 1;
                 let mut new_line = Line::new();
-                new_line.push((self.char_counter, 0, char_bytes('\n')));
+                // pushes this charactedr with the previous id as its parent. Safe assumtion, since
+                // right now we're just walking the file characters and increasing a counter
+                new_line.push((
+                    self.char_counter,
+                    0,
+                    char_bytes('\n'),
+                    self.char_counter - 1,
+                ));
                 self.char_counter += 1;
                 self.tree.insert(line_count, new_line);
             } else if c == '\r' {
                 line_count += 1;
                 let mut new_line = Line::new();
-                new_line.push((self.char_counter, 0, char_bytes('\r')));
+                new_line.push((
+                    self.char_counter,
+                    0,
+                    char_bytes('\r'),
+                    self.char_counter - 1,
+                ));
                 self.char_counter += 1;
                 self.tree.insert(line_count, new_line);
             } else {
                 let current_line = self.tree.get_mut(&line_count).unwrap();
                 // when adding a file, it just uses the peer of 0. smallest possible peer,
                 // meaning that the file's original state is always what gets preference
-                current_line.push((self.char_counter, 0, char_bytes(c)));
+                current_line.push((self.char_counter, 0, char_bytes(c), self.char_counter - 1));
             }
         }
     }
@@ -185,7 +197,7 @@ impl Entry<SharFile> for SharFile {
         // if the parent is the last in its line, just insert this at the end
         if parent_index >= Some(self.tree[&line_number].len() - 1) {
             if let Some(line) = self.tree.get_mut(&line_number) {
-                line.push((id, peer, val));
+                line.push((id, peer, val, parent_id));
             };
 
             Ok(())

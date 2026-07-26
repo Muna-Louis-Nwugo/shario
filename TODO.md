@@ -9,9 +9,9 @@
 
 ## 🟠 CRDT correctness — the convergence core
 
-- [ ] **Walk the sibling run** (`src/shar/core/tree.rs:181-204`) — replace the single-neighbor compare with: step over every child of the parent that outranks the new node by `(id desc, peer_id asc)`, insert before the first it beats.
+- [x] **Walk the sibling run** (`src/shar/core/tree.rs:181-204`) — replace the single-neighbor compare with: step over every child of the parent that outranks the new node by `(id desc, peer_id asc)`, insert before the first it beats.
 - [x] **Add a parent id to each element** (`Line` in `src/shar/core/tree.rs:16`) — currently `(id, peer_id, atom)` can't tell "child of X" from "descendant of X", so the walk can't know where the run ends. Add the parent field.
-- [ ] **Tombstones for deletes** — `RemoveChar`/`ChangeChar` need mark-not-remove handling in `add_crdt`, or concurrent "insert after deleted node" breaks.
+- [x] **Tombstones for deletes** — `RemoveChar`/`ChangeChar` need mark-not-remove handling in `add_crdt`, or concurrent "insert after deleted node" breaks.
 - [ ] **Global id uniqueness** — advance `char_counter` (or derive ids from `this_id` + counter) for *local* inserts, not just `add_file`. Confirm `(id, peer_id)` is unique across peers.
 
 ## 🟡 Data model — decide before building more on top

@@ -1,5 +1,6 @@
 //! Contains character tree that manages local state
 use std::fmt;
+use std::thread::current;
 
 use crate::shar::prelude::*;
 use std::collections::HashMap;
@@ -192,40 +193,68 @@ impl Entry<SharFile> for SharFile {
             distance_from_og += 1;
         }
 
-        let (id, peer, val) = (crdt.id, crdt.peer, crdt.value.clone());
+        match parent_index {
+            Some(index) => {
+                let (id, peer, val) = (crdt.id, crdt.peer, crdt.value.clone());
 
-        // if the parent is the last in its line, just insert this at the end
-        if parent_index >= Some(self.tree[&line_number].len() - 1) {
-            if let Some(line) = self.tree.get_mut(&line_number) {
-                line.push((id, peer, val, parent_id));
-            };
+                // if the parent is the last in its line, just insert this at the end
+                if index >= self.tree[&line_number].len() - 1 {
+                    if let Some(line) = self.tree.get_mut(&line_number) {
+                        line.push((id, peer, val.clone(), parent_id));
+                    };
 
-            Ok(())
-        } else {
-            // check what's already sitting after the parent. Only the id and peer
-            // matter for ordering, and both are Copy, so we don't hold a borrow of the value
-            let successor = &self.tree[&line_number][parent_index.unwrap_or(0) + 1];
-            let (other_id, other_peer) = (successor.0, successor.1);
-
-            // if the counter id value is larger, then it wins
-
-            if let Some(line) = self.tree.get_mut(&line_number) {
-                if other_id > id {
-                    line.insert(parent_index.unwrap_or(0) + 2, (id, peer, val));
-                } else if id > other_id {
-                    line.insert(parent_index.unwrap_or(0) + 1, (id, peer, val));
+                    self.char_counter += 1;
+                    Ok(())
                 } else {
-                    // if both of the ids are the same, the one with the smaller peer wins. This favours
-                    // those who joined the session earlier
-                    if other_peer < peer {
-                        line.insert(parent_index.unwrap_or(0) + 2, (id, peer, val));
-                    } else if peer < other_peer {
-                        line.insert(parent_index.unwrap_or(0) + 1, (id, peer, val));
+                    let mut offset = 1;
+                    if let Some(current_line) = self.tree.get_mut(&line_number) {
+                        loop {
+                            if index + offset >= current_line.len() - 1 {
+                                break;
+                            }
+                            let current_at_position = &current_line[index + offset];
+
+                            // if this id is greater than the id that's already there, just chose
+                            // this one
+                            if current_at_position.0 < id {
+                                current_line
+                                    .insert(index + offset, (id, peer, val.clone(), parent_id));
+                                break;
+                            }
+                            // if the parent ids don't match up for some reason, pick this one
+                            else if current_at_position.3 != parent_id {
+                                current_line
+                                    .insert(index + offset, (id, peer, val.clone(), parent_id));
+                                break;
+                            } else {
+                                // if the peer id  of what's already there is less than this peer
+                                // id, that implies that it was made by someone who joined earlier.
+                                // In this case, increment the offset and continue the coop to
+                                // check the next value
+                                if current_at_position.1 < peer {
+                                    offset += 1;
+                                    continue;
+                                }
+                                // if the peer id of what's already there is less than or (god
+                                // forbid) equal to this peer id, then assume who made this joined
+                                // first and insert insert the CRDT
+                                else {
+                                    current_line
+                                        .insert(index + offset, (id, peer, val.clone(), parent_id));
+                                    break;
+                                }
+                            }
+                        }
                     }
+
+                    self.char_counter += 1;
+                    Ok(())
                 }
             }
 
-            Ok(())
+            None => Err(Error::OutOfBounds(String::from(
+                "Parent index doesn't exist",
+            ))),
         }
     }
 }

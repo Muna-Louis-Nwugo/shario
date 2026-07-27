@@ -208,24 +208,27 @@ impl Entry<SharFile> for SharFile {
                     let mut offset = 1;
                     if let Some(current_line) = self.tree.get_mut(&line_number) {
                         loop {
-                            if index + offset >= current_line.len() - 1 {
+                            // if we've reached the end of the line, just push to the end
+                            if index + offset >= current_line.len() {
                                 current_line.push((id, peer, val.clone(), parent_id));
+                                break;
                             }
                             let current_at_position = &current_line[index + offset];
 
-                            // if this id is greater than the id that's already there, just chose
-                            // this one
+                            // if the other thing doesn't have this parent, then just put this
+                            // there
                             if current_at_position.3 != parent_id {
                                 current_line
                                     .insert(index + offset, (id, peer, val.clone(), parent_id));
                                 break;
-                            } else if current_at_position.0 < id {
+                            }
+                            // if this id is greater than the id that's already there, just chose
+                            // this one
+                            else if current_at_position.0 < id {
                                 current_line
                                     .insert(index + offset, (id, peer, val.clone(), parent_id));
                                 break;
-                            }
-                            // if the parent ids don't match up for some reason, pick this one
-                            else if current_at_position.0 == id {
+                            } else if current_at_position.0 == id {
                                 // if the peer id  of what's already there is less than this peer
                                 // id, that implies that it was made by someone who joined earlier.
                                 // In this case, increment the offset and continue the coop to
@@ -242,6 +245,9 @@ impl Entry<SharFile> for SharFile {
                                         .insert(index + offset, (id, peer, val.clone(), parent_id));
                                     break;
                                 }
+                            } else {
+                                offset += 1;
+                                continue;
                             }
                         }
                     }

@@ -1,6 +1,5 @@
 //! Contains character tree that manages local state
 use std::fmt;
-use std::thread::current;
 
 use crate::shar::prelude::*;
 use std::collections::HashMap;
@@ -210,23 +209,23 @@ impl Entry<SharFile> for SharFile {
                     if let Some(current_line) = self.tree.get_mut(&line_number) {
                         loop {
                             if index + offset >= current_line.len() - 1 {
-                                break;
+                                current_line.push((id, peer, val.clone(), parent_id));
                             }
                             let current_at_position = &current_line[index + offset];
 
                             // if this id is greater than the id that's already there, just chose
                             // this one
-                            if current_at_position.0 < id {
+                            if current_at_position.3 != parent_id {
+                                current_line
+                                    .insert(index + offset, (id, peer, val.clone(), parent_id));
+                                break;
+                            } else if current_at_position.0 < id {
                                 current_line
                                     .insert(index + offset, (id, peer, val.clone(), parent_id));
                                 break;
                             }
                             // if the parent ids don't match up for some reason, pick this one
-                            else if current_at_position.3 != parent_id {
-                                current_line
-                                    .insert(index + offset, (id, peer, val.clone(), parent_id));
-                                break;
-                            } else {
+                            else if current_at_position.0 == id {
                                 // if the peer id  of what's already there is less than this peer
                                 // id, that implies that it was made by someone who joined earlier.
                                 // In this case, increment the offset and continue the coop to

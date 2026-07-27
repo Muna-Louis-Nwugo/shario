@@ -36,6 +36,7 @@ pub struct SharFile {
     file_path: PathBuf,
     tree: HashMap<LineSize, Line>,
     char_counter: u32,
+    num_lines: u16,
 }
 
 impl SharFile {
@@ -83,6 +84,8 @@ impl SharFile {
                 current_line.push((self.char_counter, 0, char_bytes(c), self.char_counter - 1));
             }
         }
+
+        self.num_lines = line_count;
     }
 
     fn check_line(&self, line_number: LineSize, parent_id: IdSize) -> Result<Option<usize>> {
@@ -111,11 +114,11 @@ impl Entry<SharFile> for SharFile {
 
         match file {
             Ok(file) => {
-                println!("SharFile::new, okay entered");
                 let mut shar_file = SharFile {
                     file_path: file_path,
                     tree: HashMap::new(),
                     char_counter: 0,
+                    num_lines: 0,
                 };
 
                 // it's okay to ignore the Error that could occur here because we're performing the
@@ -131,15 +134,23 @@ impl Entry<SharFile> for SharFile {
             )),
         }
     }
+
     /// Adds a CRDT to the tree.
     fn add_crdt(
         &mut self,
         crdt: &CRDT,
-        _file_path: &PathBuf,
+        file_path: &PathBuf,
         line_number: LineSize,
         parent_id: IdSize,
     ) -> Result<()> {
         // TODO:  Add support for special cases such as new line and remove line
+        if file_path != &self.file_path {
+            return Err(Error::Generic(String::from("Oops! Wrong file")));
+        }
+
+        if line_number > self.num_lines {
+            return Err(Error::UnknownOrigin(String::from("Line does not exist")));
+        }
 
         // iterate through the line to find the parent_id
         let mut parent_index: Option<usize> = None;

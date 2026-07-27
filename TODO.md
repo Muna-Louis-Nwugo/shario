@@ -13,6 +13,7 @@
 - [x] **Add a parent id to each element** (`Line` in `src/shar/core/tree.rs:16`) — currently `(id, peer_id, atom)` can't tell "child of X" from "descendant of X", so the walk can't know where the run ends. Add the parent field.
 - [x] **Tombstones for deletes** — `RemoveChar`/`ChangeChar` need mark-not-remove handling in `add_crdt`, or concurrent "insert after deleted node" breaks.
 - [ ] **Global id uniqueness** — advance `char_counter` (or derive ids from `this_id` + counter) for *local* inserts, not just `add_file`. Confirm `(id, peer_id)` is unique across peers.
+- [ ] Correctly add new lines to SharFile
 
 ## 🟡 Data model — decide before building more on top
 

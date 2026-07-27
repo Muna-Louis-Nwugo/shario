@@ -7,9 +7,8 @@ use std::path::PathBuf;
 
 // A vector representation of a file's line. Each element is a decomposed CRDT in tuple form:
 //
-// (id, peer_id, value, parent_id)
-// TODO: Lowkey might need to include peer id of child as well as parent
-pub type Line = Vec<(IdSize, PeerIdSize, Value, IdSize)>;
+// (id, peer_id, value, parent_id, parent_peer_id)
+pub type Line = Vec<(IdSize, PeerIdSize, Value, IdSize, PeerIdSize)>;
 
 /// Encodes a single character to its UTF-8 bytes (one char per node).
 fn char_bytes(c: char) -> Value {
@@ -27,7 +26,10 @@ pub trait Entry<T> {
         file_path: &PathBuf,
         line_num: LineSize,
         parent: IdSize,
+        parent_peer: PeerIdSize,
     ) -> Result<()>;
+
+    fn add_line(&mut self, line: LineSize, column: u16) -> Result<()>;
 }
 
 /// Represents a file in the shar
@@ -45,7 +47,7 @@ impl SharFile {
         // the shar specification states that peer 0 is reserved for the char itself to add to the
         // tree as necessary
         let mut first_line = Line::new();
-        first_line.push((0, 0, char_bytes(0 as char), 0));
+        first_line.push((0, 0, char_bytes(0 as char), 0, 0));
         self.char_counter += 1;
 
         let mut line_count = 0;
@@ -63,6 +65,7 @@ impl SharFile {
                     0,
                     char_bytes('\n'),
                     self.char_counter - 1,
+                    0,
                 ));
                 self.char_counter += 1;
                 self.tree.insert(line_count, new_line);
@@ -74,6 +77,7 @@ impl SharFile {
                     0,
                     char_bytes('\r'),
                     self.char_counter - 1,
+                    0,
                 ));
                 self.char_counter += 1;
                 self.tree.insert(line_count, new_line);
@@ -81,14 +85,19 @@ impl SharFile {
                 let current_line = self.tree.get_mut(&line_count).unwrap();
                 // when adding a file, it just uses the peer of 0. smallest possible peer,
                 // meaning that the file's original state is always what gets preference
-                current_line.push((self.char_counter, 0, char_bytes(c), self.char_counter - 1));
+                current_line.push((self.char_counter, 0, char_bytes(c), self.char_counter - 1, 0));
             }
         }
 
         self.num_lines = line_count;
     }
 
-    fn check_line(&self, line_number: LineSize, parent_id: IdSize) -> Result<Option<usize>> {
+    fn check_line(
+        &self,
+        line_number: LineSize,
+        parent_id: IdSize,
+        parent_peer: PeerIdSize,
+    ) -> Result<Option<usize>> {
         let line = self
             .tree
             .get(&line_number)
@@ -96,7 +105,7 @@ impl SharFile {
         let mut parent_index = None;
 
         for (pos, element) in line.iter().enumerate() {
-            if element.0 == parent_id {
+            if element.0 == parent_id && element.1 == parent_peer {
                 parent_index = Some(pos);
 
                 break;
@@ -142,6 +151,7 @@ impl Entry<SharFile> for SharFile {
         file_path: &PathBuf,
         line_number: LineSize,
         parent_id: IdSize,
+        parent_peer: PeerIdSize,
     ) -> Result<()> {
         // TODO:  Add support for special cases such as new line and remove line
         if file_path != &self.file_path {
@@ -163,7 +173,8 @@ impl Entry<SharFile> for SharFile {
             if num_errors >= 2 {
                 return Err(Error::OutOfBounds(String::from("Parent does not exist")));
             }
-            let check_forward = self.check_line(line_number + distance_from_og, parent_id);
+            let check_forward =
+                self.check_line(line_number + distance_from_og, parent_id, parent_peer);
 
             match check_forward {
                 Ok(result) => {
@@ -185,7 +196,8 @@ impl Entry<SharFile> for SharFile {
                     continue;
                 }
 
-                let check_backward = self.check_line(line_number - distance_from_og, parent_id);
+                let check_backward =
+                    self.check_line(line_number - distance_from_og, parent_id, parent_peer);
 
                 match check_backward {
                     Ok(result) => {
@@ -210,7 +222,7 @@ impl Entry<SharFile> for SharFile {
                 // if the parent is the last in its line, just insert this at the end
                 if index >= self.tree[&line_number].len() - 1 {
                     if let Some(line) = self.tree.get_mut(&line_number) {
-                        line.push((id, peer, val.clone(), parent_id));
+                        line.push((id, peer, val.clone(), parent_id, parent_peer));
                     };
 
                     self.char_counter += 1;
@@ -221,23 +233,29 @@ impl Entry<SharFile> for SharFile {
                         loop {
                             // if we've reached the end of the line, just push to the end
                             if index + offset >= current_line.len() {
-                                current_line.push((id, peer, val.clone(), parent_id));
+                                current_line.push((id, peer, val.clone(), parent_id, parent_peer));
                                 break;
                             }
                             let current_at_position = &current_line[index + offset];
 
                             // if the other thing doesn't have this parent, then just put this
                             // there
-                            if current_at_position.3 != parent_id {
-                                current_line
-                                    .insert(index + offset, (id, peer, val.clone(), parent_id));
+                            if current_at_position.3 != parent_id
+                                || current_at_position.4 != parent_peer
+                            {
+                                current_line.insert(
+                                    index + offset,
+                                    (id, peer, val.clone(), parent_id, parent_peer),
+                                );
                                 break;
                             }
                             // if this id is greater than the id that's already there, just chose
                             // this one
                             else if current_at_position.0 < id {
-                                current_line
-                                    .insert(index + offset, (id, peer, val.clone(), parent_id));
+                                current_line.insert(
+                                    index + offset,
+                                    (id, peer, val.clone(), parent_id, parent_peer),
+                                );
                                 break;
                             } else if current_at_position.0 == id {
                                 // if the peer id  of what's already there is less than this peer
@@ -252,8 +270,10 @@ impl Entry<SharFile> for SharFile {
                                 // forbid) equal to this peer id, then assume who made this joined
                                 // first and insert insert the CRDT
                                 else {
-                                    current_line
-                                        .insert(index + offset, (id, peer, val.clone(), parent_id));
+                                    current_line.insert(
+                                        index + offset,
+                                        (id, peer, val.clone(), parent_id, parent_peer),
+                                    );
                                     break;
                                 }
                             } else {
@@ -271,6 +291,14 @@ impl Entry<SharFile> for SharFile {
             None => Err(Error::OutOfBounds(String::from(
                 "Parent index doesn't exist",
             ))),
+        }
+    }
+
+    fn add_line(&mut self, line: LineSize, column: u16) -> Result<()> {
+        if let Some(_existing) = self.tree.get(&line) {
+            return Err(Error::Generic(String::from("Oops! line already exists")));
+        } else {
+            Ok(())
         }
     }
 }
@@ -353,7 +381,12 @@ impl Entry<SharDirectory> for SharDirectory {
         _file_path: &PathBuf,
         _line_num: LineSize,
         _parent: IdSize,
+        _parent_peer: PeerIdSize,
     ) -> Result<()> {
+        Ok(())
+    }
+
+    fn add_line(&mut self, _line: LineSize, _column: u16) -> Result<()> {
         Ok(())
     }
 }

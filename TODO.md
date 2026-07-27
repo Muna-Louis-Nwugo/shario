@@ -13,11 +13,15 @@
 - [x] **Add a parent id to each element** (`Line` in `src/shar/core/tree.rs:16`) — currently `(id, peer_id, atom)` can't tell "child of X" from "descendant of X", so the walk can't know where the run ends. Add the parent field.
 - [x] **Tombstones for deletes** — `RemoveChar`/`ChangeChar` need mark-not-remove handling in `add_crdt`, or concurrent "insert after deleted node" breaks.
 - [ ] **Global id uniqueness** — advance `char_counter` (or derive ids from `this_id` + counter) for *local* inserts, not just `add_file`. Confirm `(id, peer_id)` is unique across peers.
+- [ ] **Parent lookup only matches on bare `id`** (`check_line`, the `parent_col` projection lookup) — both do `element.0 == parent_id` with no peer check. If two peers' local counters collide on the same id, this silently resolves to whichever node comes first and anchors the whole sibling walk to the wrong parent. Needs `parent_id` to travel everywhere as `(IdSize, PeerIdSize)`, not a bare id — `Line`'s parent field needs a `parent_peer` slot too, and `add_crdt`/`Entry::add_crdt` need a `parent_peer` param threaded through. The sibling-walk tie-break itself (id desc, peer asc) is already correct and doesn't need to change.
 - [ ] Correctly add new lines to SharFile
 
 ## 🟡 Data model — decide before building more on top
 
-- [ ] **Reconsider `HashMap<LineSize, Line>` keyed by ordinal** (`src/shar/core/tree.rs:35`) — newline insert/delete renumbers every later key (O(n)) and concurrent line inserts collide. Consider one logical sequence with `\n` as an ordinary element.
+- [ ] **Reconsider `HashMap<LineSize, Line>` keyed by ordinal** (`src/shar/core/tree.rs:35`) — newline insert/delete renumbers every later key (O(n)) and concurrent line inserts collide. Decided direction: split into two structures instead of one —
+  - `tree`: a single flat `Line` (just `Vec<(...)>`, no per-line partitioning at all) covering the whole file, `\n`/`\r` are ordinary elements in it. This is the actual CRDT state — the only thing that needs to satisfy merge/convergence.
+  - `projection: Vec<Vec<(IdSize, PeerIdSize)>>`: a line/column → node-id index, purely derived from `tree`, never merged over the network. `add_crdt` patches it incrementally in the same call that mutates `tree` (no separate eventing layer needed since ownership is already a direct call chain: `SharQueue` → `SharDirectory` → `SharFile`).
+  - Column lookup within a line still walks the small `projection` row / `tree` slice directly — no fancier index needed at that scale.
 - [ ] **Consistent anchor sentinel** (`add_file`, `src/shar/core/tree.rs:41`) — the reserved `(0,0,Atom(0))` anchor exists only on line 0; every other line has no parent for column-0 inserts.
 
 ## 🟢 Serialization pipeline — pick one layout

@@ -17,6 +17,8 @@ pub struct W<T>(pub T);
 
 pub type CRDT = types::CRDT;
 
+pub type CrdtRelation = types::CrdtRelation;
+
 pub type OperationType = types::OperationType;
 
 pub type Operation = types::Operation;

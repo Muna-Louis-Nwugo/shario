@@ -32,16 +32,16 @@ impl OperationType {
 /// id: u8 -> the id of this specific character
 #[derive(Clone, Debug)]
 pub struct CRDT {
-    pub value: Value,
-    pub id: IdSize,
-    pub parent: IdSize,
-    pub peer: PeerIdSize,
+    pub value: Vec<u8>,
+    pub id: u32,
+    pub parent: u32,
+    pub peer: u8,
     pub deleted: bool,
 }
 
 impl CRDT {
     /// Creates a new CRDT
-    pub fn new(value: char, id: IdSize, parent: IdSize, peer: PeerIdSize) -> Self {
+    pub fn new(value: char, id: u32, parent: u32, peer: u8) -> Self {
         // one character per node: store its UTF-8 bytes (1-4 bytes)
         let mut buf = [0u8; 4];
         let bytes = value.encode_utf8(&mut buf).as_bytes().to_vec();
@@ -81,6 +81,12 @@ impl CRDT {
     pub fn delete(&mut self) {
         self.deleted = true;
     }
+}
+
+pub struct CrdtRelation {
+    value: Vec<u8>,
+    parent_id: u32,
+    parent_peer: u8,
 }
 
 /// Represents an operation to be sent accross the grapevine (network)

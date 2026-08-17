@@ -15,13 +15,9 @@ pub struct W<T>(pub T);
 
 // GLOBAL STRUCTS
 
-pub type CRDT = types::CRDT;
-
 pub type CrdtRelation = types::CrdtRelation;
 
 pub type OperationType = types::OperationType;
-
-pub type Operation = types::Operation;
 
 // GLOBAL VARIABLES / PRIMITIVE TYPE ALIASES
 

@@ -25,96 +25,19 @@ impl OperationType {
     }
 }
 
-/// Represents the chosen CRDT: Replicated Growable Array. Anchors are used to bound tree traversal
-/// and keep the footprint of the CRDT as small as possible for serialization
-///
-/// value: Value -> the UTF-8 bytes of this specific character (one char per node)
-/// id: u8 -> the id of this specific character
 #[derive(Clone, Debug)]
-pub struct CRDT {
-    pub value: Vec<u8>,
-    pub id: u32,
-    pub parent: u32,
-    pub peer: u8,
-    pub deleted: bool,
-}
-
-impl CRDT {
-    /// Creates a new CRDT
-    pub fn new(value: char, id: u32, parent: u32, peer: u8) -> Self {
-        // one character per node: store its UTF-8 bytes (1-4 bytes)
-        let mut buf = [0u8; 4];
-        let bytes = value.encode_utf8(&mut buf).as_bytes().to_vec();
-
-        CRDT {
-            value: bytes,
-            id: id,
-            parent: parent,
-            peer: peer,
-            deleted: false,
-        }
-    }
-
-    /// Serializes a CRDT into a length-prefixed, big-endian byte layout:
-    ///
-    /// [value_len]  [value]              [id]        [peer]
-    /// [1 byte]     [value_len bytes]    [4 bytes]   [1 byte]
-    ///
-    /// `value` is the raw UTF-8 bytes of the character (1-4 bytes for a single
-    /// Unicode scalar), so the value section is byte-identical on every machine.
-    /// `id` is written big-endian. A single scalar is at most 4 bytes, so the
-    /// 1-byte length prefix is always sufficient.
-    pub fn to_bytes(self) -> Vec<u8> {
-        // 1 length byte + value + 4-byte id + 1-byte peer
-        let mut output = Vec::with_capacity(1 + self.value.len() + 5);
-
-        output.push(self.value.len() as u8);
-        output.extend_from_slice(&self.value);
-        output.extend_from_slice(&self.id.to_be_bytes());
-        output.push(self.peer);
-
-        output
-    }
-
-    /// Turns this CRDT into a tombstone
-
-    pub fn delete(&mut self) {
-        self.deleted = true;
-    }
-}
-
 pub struct CrdtRelation {
     value: Vec<u8>,
     parent_id: u32,
     parent_peer: u8,
 }
 
-/// Represents an operation to be sent accross the grapevine (network)
-///
-///crdt: [CRDT] -> A CRDT  
-///operation_type: [OperationType] -> The type of operation being performed
-///peer: u32 -> The user_id that created the operation
-pub struct Operation {
-    crdt: CRDT,
-    operation_type: OperationType,
-}
-
-impl Operation {
-    pub fn new(crdt: CRDT, operation_type: OperationType) -> Self {
-        Operation {
-            crdt: crdt,
-            operation_type: operation_type,
+impl CrdtRelation {
+    pub fn new(value: Vec<u8>, parent_id: u32, parent_peer: u8) -> Self {
+        CrdtRelation {
+            value: value,
+            parent_id: parent_id,
+            parent_peer: parent_peer,
         }
-    }
-
-    ///Converts operations into bytes:
-    ///
-    ///[crdt]              [operation_type]
-    ///[length-prefixed]   [2 bytes]
-    pub fn to_bytes(self) -> Vec<u8> {
-        let mut output = self.crdt.to_bytes();
-        output.extend_from_slice(&self.operation_type.value());
-
-        output
     }
 }

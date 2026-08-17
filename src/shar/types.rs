@@ -25,19 +25,36 @@ impl OperationType {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(PartialEq, Clone, Debug)]
 pub struct CrdtRelation {
-    value: Vec<u8>,
-    parent_id: u32,
-    parent_peer: u8,
+    pub value: char,
+    pub parent_id: u32,
+    pub parent_peer: u8,
 }
 
 impl CrdtRelation {
-    pub fn new(value: Vec<u8>, parent_id: u32, parent_peer: u8) -> Self {
+    pub fn new(value: char, parent_id: u32, parent_peer: u8) -> Self {
         CrdtRelation {
             value: value,
             parent_id: parent_id,
             parent_peer: parent_peer,
+        }
+    }
+}
+
+///crdt: [CrdtRelation] -> A CrdtRelation  
+///operation_type: [OperationType] -> The type of operation being performed
+///peer: u32 -> The user_id that created the operation
+pub struct Operation {
+    crdt: CrdtRelation,
+    operation_type: OperationType,
+}
+
+impl Operation {
+    pub fn new(crdt: CrdtRelation, operation_type: OperationType) -> Self {
+        Operation {
+            crdt: crdt,
+            operation_type: operation_type,
         }
     }
 }

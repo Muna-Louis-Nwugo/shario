@@ -9,26 +9,18 @@ use std::path::PathBuf;
 //
 // (value, parent_id, parent_peer_id)
 
-/// Encodes a single character to its UTF-8 bytes (one char per node).
-fn char_bytes(c: char) -> Value {
-    let mut buf = [0u8; 4];
-    c.encode_utf8(&mut buf).as_bytes().to_vec()
-}
-
 // Behaviours for structs representing file system or directory names
 pub trait Entry<T> {
     fn new(file_path: PathBuf) -> Result<T>;
 
     fn add_crdt(
         &mut self,
-        crdt: &CRDT,
         file_path: &PathBuf,
-        line_num: LineSize,
-        parent: IdSize,
-        parent_peer: PeerIdSize,
+        coordinates: (usize, usize),
+        id: IdSize,
+        peer: PeerIdSize,
+        crdt: &CrdtRelation,
     ) -> Result<()>;
-
-    fn add_line(&mut self, line: LineSize, column: u16) -> Result<()>;
 }
 
 /// Represents a file in the shar
@@ -49,15 +41,20 @@ impl SharFile {
         for (_i, c) in file_contents.char_indices() {
             self.char_counter += 1;
 
-            self.characters.insert(
-                (self.char_counter, 0),
-                (char_bytes(c), self.char_counter - 1, 0),
-            );
+            let relation = CrdtRelation::new(c, self.char_counter - 1, 0);
+
+            self.characters.insert((self.char_counter, 0), relation);
         }
     }
 
-
-    fn update_projection(&mut self, )
+    fn update_projection(
+        &mut self,
+        relation: CrdtRelation,
+        value: Value,
+        id: IdSize,
+        peer_id: PeerIdSize,
+    ) {
+    }
 }
 
 impl Entry<SharFile> for SharFile {
@@ -69,9 +66,9 @@ impl Entry<SharFile> for SharFile {
             Ok(file) => {
                 let mut shar_file = SharFile {
                     file_path: file_path,
-                    tree: HashMap::new(),
+                    characters: HashMap::new(),
+                    projection: Vec::new(),
                     char_counter: 0,
-                    num_lines: 0,
                 };
 
                 // it's okay to ignore the Error that could occur here because we're performing the
@@ -91,185 +88,77 @@ impl Entry<SharFile> for SharFile {
     /// Adds a CRDT to the tree.
     fn add_crdt(
         &mut self,
-        crdt: &CRDT,
         file_path: &PathBuf,
-        line_number: LineSize,
-        parent_id: IdSize,
-        parent_peer: PeerIdSize,
+        coordiantes: (usize, usize),
+        id: IdSize,
+        peer: PeerIdSize,
+        crdt: &CrdtRelation,
     ) -> Result<()> {
-        // TODO:  Add support for special cases such as new line and remove line
         if file_path != &self.file_path {
             return Err(Error::Generic(String::from("Oops! Wrong file")));
         }
 
-        if line_number > self.num_lines {
-            return Err(Error::UnknownOrigin(String::from("Line does not exist")));
-        }
+        // add this crdt to the HashMap
+        let relation = crdt.clone();
+        self.characters.insert((id, peer), relation);
 
-        // iterate through the line to find the parent_id
-        let mut parent_index: Option<usize> = None;
+        let insertion_value = (id, peer);
 
-        let mut distance_from_og = 0;
-        let mut num_errors = 0;
+        //TODO: if this is a new line, call on a different method to add a new line first, then update
+        //coordiantes to match
 
-        // looks through the entire fire to find the CRDT, starting from the assumed line
-        while parent_index.is_none() {
-            if num_errors >= 2 {
-                return Err(Error::OutOfBounds(String::from("Parent does not exist")));
-            }
-            let check_forward =
-                self.check_line(line_number + distance_from_og, parent_id, parent_peer);
+        // figure out where it goes in the projection
+        for i in coordiantes.0..self.projection.len() {
+            for j in coordiantes.1..self.projection[i].len() {
+                // if the next element in the line exists
+                if let Some(next_element) = self.projection[i].get(j + 1) {
+                    let next_info = (
+                        self.characters[next_element].parent_id,
+                        self.characters[next_element].parent_peer,
+                    );
 
-            match check_forward {
-                Ok(result) => {
-                    if !result.is_none() {
-                        parent_index = result;
-                    }
-                }
+                    if next_info != (crdt.parent_id, crdt.parent_peer) {
+                        // if the next element doesn't have the same parent, just insert this one next
+                        self.projection[i].insert(j + 1, insertion_value);
+                        break;
+                    } else if next_element.0 < id {
+                        // if the next element has the same parent but a smaller id, put this one
+                        // first
+                        self.projection[i].insert(j + 1, insertion_value);
+                        break;
+                    } else if next_element.0 == id {
+                        // if the ids are equal, move on to the peer ids
+                        //
 
-                Err(_e) => {
-                    num_errors += 1;
-                }
-            }
-
-            if parent_index.is_none() {
-                if distance_from_og > line_number {
-                    // inrememnt one to continue checking forward, but stop here so we don't
-                    // underflow
-                    distance_from_og += 1;
-                    continue;
-                }
-
-                let check_backward =
-                    self.check_line(line_number - distance_from_og, parent_id, parent_peer);
-
-                match check_backward {
-                    Ok(result) => {
-                        if !result.is_none() {
-                            parent_index = result;
+                        // if the peer id  of what's already there is less than this peer
+                        // id, that implies that it was made by someone who joined earlier.
+                        // In this case, increment the offset and continue the coop to
+                        // check the next value
+                        if next_element.1 < peer {
+                            continue;
+                        }
+                        // if the peer id of what's already there is less than or (god
+                        // forbid) equal to this peer id, then assume who made this joined
+                        // first and insert insert the CRDT
+                        else {
+                            self.projection[i].insert(j + 1, insertion_value);
+                            break;
                         }
                     }
-
-                    Err(_e) => {
-                        num_errors += 1;
-                    }
-                }
-            }
-
-            distance_from_og += 1;
-        }
-
-        match parent_index {
-            Some(index) => {
-                let (id, peer, val) = (crdt.id, crdt.peer, crdt.value.clone());
-
-                // if the parent is the last in its line, just insert this at the end
-                if index >= self.tree[&line_number].len() - 1 {
-                    if let Some(line) = self.tree.get_mut(&line_number) {
-                        line.push((id, peer, val.clone(), parent_id, parent_peer));
-                    };
-
-                    self.char_counter += 1;
-                    Ok(())
                 } else {
-                    let mut offset = 1;
-                    if let Some(current_line) = self.tree.get_mut(&line_number) {
-                        loop {
-                            // if we've reached the end of the line, just push to the end
-                            if index + offset >= current_line.len() {
-                                current_line.push((id, peer, val.clone(), parent_id, parent_peer));
-                                break;
-                            }
-                            let current_at_position = &current_line[index + offset];
-
-                            // if the other thing doesn't have this parent, then just put this
-                            // there
-                            if current_at_position.3 != parent_id
-                                || current_at_position.4 != parent_peer
-                            {
-                                current_line.insert(
-                                    index + offset,
-                                    (id, peer, val.clone(), parent_id, parent_peer),
-                                );
-                                break;
-                            }
-                            // if this id is greater than the id that's already there, just chose
-                            // this one
-                            else if current_at_position.0 < id {
-                                current_line.insert(
-                                    index + offset,
-                                    (id, peer, val.clone(), parent_id, parent_peer),
-                                );
-                                break;
-                            } else if current_at_position.0 == id {
-                                // if the peer id  of what's already there is less than this peer
-                                // id, that implies that it was made by someone who joined earlier.
-                                // In this case, increment the offset and continue the coop to
-                                // check the next value
-                                if current_at_position.1 < peer {
-                                    offset += 1;
-                                    continue;
-                                }
-                                // if the peer id of what's already there is less than or (god
-                                // forbid) equal to this peer id, then assume who made this joined
-                                // first and insert insert the CRDT
-                                else {
-                                    current_line.insert(
-                                        index + offset,
-                                        (id, peer, val.clone(), parent_id, parent_peer),
-                                    );
-                                    break;
-                                }
-                            } else {
-                                offset += 1;
-                                continue;
-                            }
-                        }
-                    }
-
-                    self.char_counter += 1;
-                    Ok(())
+                    // just put to the end of the line, assuming next element doesn't exist because
+                    // we're at the end
+                    self.projection[i].push((id, peer));
                 }
             }
-
-            None => Err(Error::OutOfBounds(String::from(
-                "Parent index doesn't exist",
-            ))),
         }
-    }
 
-    fn add_line(&mut self, line: LineSize, column: u16) -> Result<()> {
-        if let Some(_existing) = self.tree.get(&line) {
-            return Err(Error::Generic(String::from("Oops! line already exists")));
-        } else {
-            Ok(())
-        }
+        Ok(())
     }
 }
 
 impl<'a> fmt::Display for SharFile {
-    fn fmt(&self, f: &mut fmt::Formatter) -> std::result::Result<(), std::fmt::Error> {
-        // write_out the file path
-        write!(f, "{}\n", self.file_path.display())?;
-
-        let crdt_tree = self.tree.clone();
-        let mut anchor_id = 0;
-
-        // print out the CRDTs
-        for anchor in crdt_tree.into_values() {
-            write!(f, "ANCHOR: {}\n\n", anchor_id)?;
-            for crdt in anchor {
-                write!(
-                    f,
-                    "id: {}; peer: {}; value: {:?}; \n",
-                    crdt.0,
-                    crdt.1,
-                    String::from_utf8_lossy(&crdt.2)
-                )?;
-            }
-            anchor_id += 1;
-        }
-
+    fn fmt(&self, _f: &mut fmt::Formatter) -> std::result::Result<(), std::fmt::Error> {
         Ok(())
     }
 }
@@ -321,16 +210,12 @@ impl Entry<SharDirectory> for SharDirectory {
 
     fn add_crdt(
         &mut self,
-        _crdt: &CRDT,
         _file_path: &PathBuf,
-        _line_num: LineSize,
-        _parent: IdSize,
-        _parent_peer: PeerIdSize,
+        _coordiantes: (usize, usize),
+        _id: IdSize,
+        _peer: PeerIdSize,
+        _crdt: &CrdtRelation,
     ) -> Result<()> {
-        Ok(())
-    }
-
-    fn add_line(&mut self, _line: LineSize, _column: u16) -> Result<()> {
         Ok(())
     }
 }

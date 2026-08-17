@@ -55,6 +55,14 @@ impl SharFile {
         peer_id: PeerIdSize,
     ) {
     }
+
+    /// Splits a projection line in two right after `coordinates`, so the element at
+    /// `coordinates.1` stays the last element of the original line. If `coordinates.1`
+    /// is already the last index in the line, this just appends a new empty line after it.
+    fn add_line_to_projection(&mut self, coordinates: (usize, usize)) {
+        let new_line = self.projection[coordinates.0].split_off(coordinates.1 + 1);
+        self.projection.insert(coordinates.0 + 1, new_line);
+    }
 }
 
 impl Entry<SharFile> for SharFile {
@@ -104,52 +112,56 @@ impl Entry<SharFile> for SharFile {
 
         let insertion_value = (id, peer);
 
-        //TODO: if this is a new line, call on a different method to add a new line first, then update
-        //coordiantes to match
+        // if this is a new line, split the projection here instead of inserting a character
+        if matches!(
+            crdt.value,
+            '\n' | '\r' | '\u{0B}' | '\u{0C}' | '\u{85}' | '\u{2028}' | '\u{2029}'
+        ) {
+            self.add_line_to_projection(coordiantes);
+            return Ok(());
+        }
 
         // figure out where it goes in the projection
-        for i in coordiantes.0..self.projection.len() {
-            for j in coordiantes.1..self.projection[i].len() {
-                // if the next element in the line exists
-                if let Some(next_element) = self.projection[i].get(j + 1) {
-                    let next_info = (
-                        self.characters[next_element].parent_id,
-                        self.characters[next_element].parent_peer,
-                    );
+        for j in coordiantes.1..self.projection[coordiantes.0].len() {
+            // if the next element in the line exists
+            if let Some(next_element) = self.projection[coordiantes.0].get(j + 1) {
+                let next_info = (
+                    self.characters[next_element].parent_id,
+                    self.characters[next_element].parent_peer,
+                );
 
-                    if next_info != (crdt.parent_id, crdt.parent_peer) {
-                        // if the next element doesn't have the same parent, just insert this one next
-                        self.projection[i].insert(j + 1, insertion_value);
-                        break;
-                    } else if next_element.0 < id {
-                        // if the next element has the same parent but a smaller id, put this one
-                        // first
-                        self.projection[i].insert(j + 1, insertion_value);
-                        break;
-                    } else if next_element.0 == id {
-                        // if the ids are equal, move on to the peer ids
-                        //
+                if next_info != (crdt.parent_id, crdt.parent_peer) {
+                    // if the next element doesn't have the same parent, just insert this one next
+                    self.projection[coordiantes.0].insert(j + 1, insertion_value);
+                    break;
+                } else if next_element.0 < id {
+                    // if the next element has the same parent but a smaller id, put this one
+                    // first
+                    self.projection[coordiantes.0].insert(j + 1, insertion_value);
+                    break;
+                } else if next_element.0 == id {
+                    // if the ids are equal, move on to the peer ids
+                    //
 
-                        // if the peer id  of what's already there is less than this peer
-                        // id, that implies that it was made by someone who joined earlier.
-                        // In this case, increment the offset and continue the coop to
-                        // check the next value
-                        if next_element.1 < peer {
-                            continue;
-                        }
-                        // if the peer id of what's already there is less than or (god
-                        // forbid) equal to this peer id, then assume who made this joined
-                        // first and insert insert the CRDT
-                        else {
-                            self.projection[i].insert(j + 1, insertion_value);
-                            break;
-                        }
+                    // if the peer id  of what's already there is less than this peer
+                    // id, that implies that it was made by someone who joined earlier.
+                    // In this case, increment the offset and continue the coop to
+                    // check the next value
+                    if next_element.1 < peer {
+                        continue;
                     }
-                } else {
-                    // just put to the end of the line, assuming next element doesn't exist because
-                    // we're at the end
-                    self.projection[i].push((id, peer));
+                    // if the peer id of what's already there is less than or (god
+                    // forbid) equal to this peer id, then assume who made this joined
+                    // first and insert insert the CRDT
+                    else {
+                        self.projection[coordiantes.0].insert(j + 1, insertion_value);
+                        break;
+                    }
                 }
+            } else {
+                // just put to the end of the line, assuming next element doesn't exist because
+                // we're at the end
+                self.projection[coordiantes.0].push((id, peer));
             }
         }
 

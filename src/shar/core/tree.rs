@@ -182,6 +182,7 @@ impl Entry<SharFile> for SharFile {
             }
         }
 
+        self.char_counter += 1;
         Ok(())
     }
 }

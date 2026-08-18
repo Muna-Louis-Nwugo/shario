@@ -1,6 +1,8 @@
 //! Contains character tree that manages local state
 use std::fmt;
 
+use clap::Id;
+
 use crate::shar::prelude::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -77,8 +79,90 @@ impl SharFile {
         let new_line = self.projection[coordinates.0].split_off(coordinates.1 + 1);
         self.projection.insert(coordinates.0 + 1, new_line);
     }
-}
 
+    // returns the id, peer pair at a specific index
+    fn get_id_peer(&self, coordinates: (usize, usize)) -> Option<(IdSize, PeerIdSize)> {
+        if coordinates.0 <= self.projection.len() - 1 {
+            let val = self.projection[coordinates.0].get(coordinates.1);
+
+            match val {
+                Some((id, peer)) => Some((id.clone(), peer.clone())),
+
+                None => None,
+            }
+        } else {
+            None
+        }
+    }
+
+    // finds the parent of a crdt by performing a ring search starting from the parent's presumed
+    // location and stepping up to the top of the file and down to the bottom of the file to find
+    // it
+    fn find_parent(&self, line_num: usize, id: IdSize, peer: PeerIdSize) -> Result<(usize, usize)> {
+        let line = &self.projection[line_num];
+
+        if let Some(index) = line.iter().position(|&item| item == (id, peer)) {
+            Ok((line_num, index))
+        } else {
+            let mut up_offset = 1;
+            let mut down_offset = 1;
+            let mut up_exhausted = false;
+            let mut down_exhausted = false;
+
+            let mut check_up = || {
+                if line_num - up_offset < 0 {
+                    return Err(Error::OutOfBounds(String::from("up exhausted")));
+                } else {
+                    let current_line = &self.projection[line_num - up_offset];
+                    if let Some(index) = current_line.iter().position(|&item| item == (id, peer)) {
+                        Ok((line_num - up_offset, index))
+                    } else {
+                        up_offset += 1;
+                        Err(Error::Generic(String::from("not found on line")))
+                    }
+                }
+            };
+
+            let mut check_down = || {
+                if line_num + down_offset >= self.projection.len() {
+                    return Err(Error::OutOfBounds(String::from("down exhausted")));
+                } else {
+                    let current_line = &self.projection[line_num + down_offset];
+                    if let Some(index) = current_line.iter().position(|&item| item == (id, peer)) {
+                        Ok((line_num + down_offset, index))
+                    } else {
+                        down_offset += 1;
+                        Err(Error::Generic(String::from("not found on line")))
+                    }
+                }
+            };
+
+            while up_exhausted != true && down_exhausted != true {
+                match check_up() {
+                    Ok((row, col)) => return Ok((row, col)),
+
+                    Err(e) => {
+                        if e == Error::OutOfBounds(String::from("up exhausted")) {
+                            up_exhausted = true;
+                        }
+                    }
+                }
+
+                match check_down() {
+                    Ok((row, col)) => return Ok((row, col)),
+
+                    Err(e) => {
+                        if e == Error::OutOfBounds(String::from("down exhausted")) {
+                            down_exhausted = true;
+                        }
+                    }
+                }
+            }
+
+            Err(Error::OutOfBounds(String::from("parent cannot be found")))
+        }
+    }
+}
 impl Entry<SharFile> for SharFile {
     // TODO: Tree traversal to reconstruct file
     fn new(file_path: PathBuf) -> Result<Self> {

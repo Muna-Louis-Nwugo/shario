@@ -21,3 +21,18 @@ pub enum Error {
     #[error("OutOfBounds: {0}")]
     OutOfBounds(String),
 }
+
+impl PartialEq for Error {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Generic(a), Self::Generic(b)) => a == b,
+            (Self::ReadFail(a), Self::ReadFail(b)) => a == b,
+            (Self::InitFail(a), Self::InitFail(b)) => a == b,
+            (Self::UnknownOrigin(a), Self::UnknownOrigin(b)) => a == b,
+            (Self::OutOfBounds(a), Self::OutOfBounds(b)) => a == b,
+            // Compare the underlying error kind for the std::io::Error payload
+            (Self::Io(a), Self::Io(b)) => a.kind() == b.kind(),
+            _ => false,
+        }
+    }
+}

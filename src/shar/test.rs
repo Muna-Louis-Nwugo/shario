@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tree_tests {
     use crate::shar::core::tree::{Entry, SharFile};
-    use crate::shar::prelude::CrdtRelation;
+    use crate::shar::prelude::{CrdtRelation, CRDT};
     use std::path::PathBuf;
 
     #[test]
@@ -13,19 +13,19 @@ mod tree_tests {
         let mut file = SharFile::new(file_path.clone()).expect("failed to load file");
 
         // add a character: append 'c' after 'b' on line 0
-        let c = CrdtRelation::new('c', 2, 0);
-        file.add_crdt(&file_path, 0, 3, 0, &c, false)
+        let c = CRDT::new(3, 0, CrdtRelation::new('c', 2, 0));
+        file.add_crdt(&file_path, 0, &c, false)
             .expect("failed to add character");
 
         // add a line: split right after 'c', pushing everything past it onto a new line
-        let newline = CrdtRelation::new('\n', 3, 0);
-        file.add_crdt(&file_path, 0, 4, 0, &newline, false)
+        let newline = CRDT::new(4, 0, CrdtRelation::new('\n', 3, 0));
+        file.add_crdt(&file_path, 0, &newline, false)
             .expect("failed to add line");
 
         // add another character onto the new, now-empty second line — its parent is the
         // newline itself, which is never in the projection, so this needs start_line: true
-        let d = CrdtRelation::new('d', 4, 0);
-        file.add_crdt(&file_path, 1, 5, 0, &d, true)
+        let d = CRDT::new(5, 0, CrdtRelation::new('d', 4, 0));
+        file.add_crdt(&file_path, 1, &d, true)
             .expect("failed to add character to new line");
 
         std::fs::remove_file(&file_path).expect("failed to delete scratch file");
@@ -44,23 +44,23 @@ mod tree_tests {
         let mut replica_b = SharFile::new(path_b.clone()).expect("failed to load replica b");
 
         // two peers concurrently insert after 'b' (id 2, peer 0) without seeing each other's op
-        let op_x = CrdtRelation::new('x', 2, 0); // id 10, peer 1
-        let op_y = CrdtRelation::new('y', 2, 0); // id 7, peer 2
+        let op_x = CRDT::new(10, 1, CrdtRelation::new('x', 2, 0));
+        let op_y = CRDT::new(7, 2, CrdtRelation::new('y', 2, 0));
 
         // replica_a applies them in one order...
         replica_a
-            .add_crdt(&path_a, 0, 10, 1, &op_x, false)
+            .add_crdt(&path_a, 0, &op_x, false)
             .expect("a: failed to apply x");
         replica_a
-            .add_crdt(&path_a, 0, 7, 2, &op_y, false)
+            .add_crdt(&path_a, 0, &op_y, false)
             .expect("a: failed to apply y");
 
         // ...replica_b applies the exact same ops in the opposite order
         replica_b
-            .add_crdt(&path_b, 0, 7, 2, &op_y, false)
+            .add_crdt(&path_b, 0, &op_y, false)
             .expect("b: failed to apply y");
         replica_b
-            .add_crdt(&path_b, 0, 10, 1, &op_x, false)
+            .add_crdt(&path_b, 0, &op_x, false)
             .expect("b: failed to apply x");
 
         assert_eq!(
@@ -93,8 +93,8 @@ mod tree_tests {
         let (parent_id, parent_peer) = file
             .get_id_peer((0, 1))
             .expect("'b' should still be there");
-        let c = CrdtRelation::new('c', parent_id, parent_peer);
-        file.add_crdt(&file_path, 0, 3, 0, &c, false)
+        let c = CRDT::new(3, 0, CrdtRelation::new('c', parent_id, parent_peer));
+        file.add_crdt(&file_path, 0, &c, false)
             .expect("failed to add character using looked-up parent");
 
         assert_eq!(

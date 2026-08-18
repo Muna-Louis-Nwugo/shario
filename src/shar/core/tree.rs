@@ -1,8 +1,6 @@
 //! Contains character tree that manages local state
 use std::fmt;
 
-use clap::Id;
-
 use crate::shar::prelude::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -27,10 +25,16 @@ pub trait Entry<T> {
         &mut self,
         file_path: &PathBuf,
         line_num: usize,
+        crdt: &CRDT,
+        start_line: bool,
+    ) -> Result<()>;
+
+    fn remove_crdt(
+        &mut self,
+        file_path: &PathBuf,
+        line_num: usize,
         id: IdSize,
         peer: PeerIdSize,
-        crdt: &CrdtRelation,
-        start_line: bool,
     ) -> Result<()>;
 }
 
@@ -68,10 +72,10 @@ impl SharFile {
             self.char_counter += 1;
             let id = self.char_counter;
 
-            let relation = CrdtRelation::new(c, id - 1, 0);
+            let crdt = CRDT::new(id, 0, CrdtRelation::new(c, id - 1, 0));
 
             // safe to ignore: file_path always matches self's own path during initial load
-            let _ = self.add_crdt(&file_path, line, id, 0, &relation, start_of_line);
+            let _ = self.add_crdt(&file_path, line, &crdt, start_of_line);
 
             if is_line_break(c) {
                 line += 1;
@@ -105,10 +109,10 @@ impl SharFile {
         }
     }
 
-    // finds the parent of a crdt by performing a ring search starting from the parent's presumed
+    // finds a crdt by performing a ring search starting from the parent's presumed
     // location and stepping up to the top of the file and down to the bottom of the file to find
     // it
-    fn find_parent(&self, line_num: usize, id: IdSize, peer: PeerIdSize) -> Result<(usize, usize)> {
+    fn find_crdt(&self, line_num: usize, id: IdSize, peer: PeerIdSize) -> Result<(usize, usize)> {
         // nothing has been added yet, so there's nothing to search for — this must be the root
         // sentinel parent of the very first character
         if self.characters.is_empty() {
@@ -212,14 +216,16 @@ impl Entry<SharFile> for SharFile {
         &mut self,
         file_path: &PathBuf,
         line_num: usize,
-        id: IdSize,
-        peer: PeerIdSize,
-        crdt: &CrdtRelation,
+        crdt: &CRDT,
         start_line: bool,
     ) -> Result<()> {
         if file_path != &self.file_path {
             return Err(Error::Generic(String::from("Oops! Wrong file")));
         }
+
+        let id = crdt.id;
+        let peer = crdt.peer;
+        let relation = &crdt.relation;
 
         // a retry/resend of an op we've already applied is a no-op, not a duplicate insert
         if self.characters.contains_key(&(id, peer)) {
@@ -232,19 +238,18 @@ impl Entry<SharFile> for SharFile {
         let parent = if start_line {
             Ok((line_num, 0))
         } else {
-            self.find_parent(line_num, crdt.parent_id, crdt.parent_peer)
+            self.find_crdt(line_num, relation.parent_id, relation.parent_peer)
         };
 
         match parent {
             Ok(coordinates) => {
                 // add this crdt to the HashMap
-                let relation = crdt.clone();
-                self.characters.insert((id, peer), relation);
+                self.characters.insert((id, peer), relation.clone());
 
                 let insertion_value = (id, peer);
 
                 // if this is a new line, split the projection here instead of inserting a character
-                if is_line_break(crdt.value) {
+                if is_line_break(relation.value) {
                     self.add_line_to_projection(coordinates);
                     return Ok(());
                 }
@@ -269,7 +274,7 @@ impl Entry<SharFile> for SharFile {
                         self.characters[candidate].parent_peer,
                     );
 
-                    if candidate_info != (crdt.parent_id, crdt.parent_peer) {
+                    if candidate_info != (relation.parent_id, relation.parent_peer) {
                         // the candidate isn't a sibling of this CRDT — insert here
                         break;
                     } else if candidate.0 < id {
@@ -292,6 +297,43 @@ impl Entry<SharFile> for SharFile {
             Err(_e) => Err(Error::OutOfBounds(String::from(
                 "parent could not be found",
             ))),
+        }
+    }
+
+    fn remove_crdt(
+        &mut self,
+        file_path: &PathBuf,
+        line_num: usize,
+        id: IdSize,
+        peer: PeerIdSize,
+    ) -> Result<()> {
+        if file_path != &self.file_path {
+            return Err(Error::Generic(String::from("Oops! Wrong file")));
+        }
+        // remove the crdt from the HashMap
+        let crdt = self.characters.get_mut(&(id, peer));
+
+        match crdt {
+            Some(val) => {
+                if val.deleted {
+                    return Ok(());
+                }
+                val.deleted = true;
+            }
+
+            None => return Err(Error::Generic(String::from("crdt cannot be found"))),
+        }
+
+        // find the value in the projection and delete it
+        let position = self.find_crdt(line_num, id, peer);
+
+        match position {
+            Ok(pos) => {
+                self.projection[pos.0].remove(pos.1);
+                Ok(())
+            }
+
+            Err(_e) => Err(Error::Generic(String::from("crdt not found"))),
         }
     }
 }
@@ -351,10 +393,18 @@ impl Entry<SharDirectory> for SharDirectory {
         &mut self,
         _file_path: &PathBuf,
         _line_num: usize,
-        _id: IdSize,
-        _peer: PeerIdSize,
-        _crdt: &CrdtRelation,
+        _crdt: &CRDT,
         _start_line: bool,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    fn remove_crdt(
+        &mut self,
+        file_path: &PathBuf,
+        line_num: usize,
+        id: IdSize,
+        peer: PeerIdSize,
     ) -> Result<()> {
         Ok(())
     }

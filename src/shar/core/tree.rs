@@ -28,6 +28,7 @@ pub trait Entry<T> {
         id: IdSize,
         peer: PeerIdSize,
         crdt: &CrdtRelation,
+        start_line: bool,
     ) -> Result<()>;
 }
 
@@ -58,7 +59,7 @@ impl SharFile {
             let relation = CrdtRelation::new(c, id - 1, 0);
 
             // safe to ignore: file_path always matches self's own path during initial load
-            let _ = self.add_crdt(&file_path, (line, col), id, 0, &relation);
+            let _ = self.add_crdt(&file_path, (line, col), id, 0, &relation, false);
 
             if is_line_break(c) {
                 line += 1;
@@ -114,9 +115,15 @@ impl Entry<SharFile> for SharFile {
         id: IdSize,
         peer: PeerIdSize,
         crdt: &CrdtRelation,
+        start_line: bool,
     ) -> Result<()> {
         if file_path != &self.file_path {
             return Err(Error::Generic(String::from("Oops! Wrong file")));
+        }
+
+        // a retry/resend of an op we've already applied is a no-op, not a duplicate insert
+        if self.characters.contains_key(&(id, peer)) {
+            return Ok(());
         }
 
         // add this crdt to the HashMap
@@ -138,51 +145,36 @@ impl Entry<SharFile> for SharFile {
             return Ok(());
         }
 
-        // figure out where it goes in the projection
-        for j in coordiantes.1..self.projection[coordiantes.0].len() {
-            // if the next element in the line exists
-            if let Some(next_element) = self.projection[coordiantes.0].get(j + 1) {
-                let next_info = (
-                    self.characters[next_element].parent_id,
-                    self.characters[next_element].parent_peer,
-                );
+        // characters at the very front of a line have no preceding sibling to anchor on, so
+        // start the walk at the first element instead of the element after `coordiantes.1`
+        let mut insert_at = if start_line { 0 } else { coordiantes.1 + 1 };
 
-                if next_info != (crdt.parent_id, crdt.parent_peer) {
-                    // if the next element doesn't have the same parent, just insert this one next
-                    self.projection[coordiantes.0].insert(j + 1, insertion_value);
-                    break;
-                } else if next_element.0 < id {
-                    // if the next element has the same parent but a smaller id, put this one
-                    // first
-                    self.projection[coordiantes.0].insert(j + 1, insertion_value);
-                    break;
-                } else if next_element.0 == id {
-                    // if the ids are equal, move on to the peer ids
-                    //
+        // walk forward comparing against each sibling candidate, stopping as soon as we find
+        // where this CRDT belongs (running off the end of the line just falls out of the loop,
+        // and inserting at that index is equivalent to pushing)
+        while let Some(candidate) = self.projection[coordiantes.0].get(insert_at) {
+            let candidate_info = (
+                self.characters[candidate].parent_id,
+                self.characters[candidate].parent_peer,
+            );
 
-                    // if the peer id  of what's already there is less than this peer
-                    // id, that implies that it was made by someone who joined earlier.
-                    // In this case, increment the offset and continue the coop to
-                    // check the next value
-                    if next_element.1 < peer {
-                        continue;
-                    }
-                    // if the peer id of what's already there is less than or (god
-                    // forbid) equal to this peer id, then assume who made this joined
-                    // first and insert insert the CRDT
-                    else {
-                        self.projection[coordiantes.0].insert(j + 1, insertion_value);
-                        break;
-                    }
-                }
-            } else {
-                // just put to the end of the line, assuming next element doesn't exist because
-                // we're at the end
-                self.projection[coordiantes.0].push((id, peer));
+            if candidate_info != (crdt.parent_id, crdt.parent_peer) {
+                // the candidate isn't a sibling of this CRDT — insert here
+                break;
+            } else if candidate.0 < id {
+                // same parent but a smaller id — this CRDT comes first
+                break;
+            } else if candidate.0 == id && candidate.1 >= peer {
+                // same id, and the peer id of what's already there is greater than or equal to
+                // this peer id — assume whoever made this joined first, so it goes first
+                break;
             }
+
+            insert_at += 1;
         }
 
-        self.char_counter += 1;
+        self.projection[coordiantes.0].insert(insert_at, insertion_value);
+
         Ok(())
     }
 }
@@ -245,6 +237,7 @@ impl Entry<SharDirectory> for SharDirectory {
         _id: IdSize,
         _peer: PeerIdSize,
         _crdt: &CrdtRelation,
+        _start_line: bool,
     ) -> Result<()> {
         Ok(())
     }

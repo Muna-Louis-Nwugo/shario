@@ -1,54 +1,32 @@
 #[cfg(test)]
-mod file_io {
-    use crate::shar::core::buffer;
-    use crate::shar::core::tree;
-    use tokio;
-
-    async fn file_write() {
-        let operation = [1u8; 14];
-        let buff = buffer::SharBuffer::new().await;
-        println!("buff finished running");
-
-        match buff {
-            Some(mut b) => {
-                println!("file successfully created");
-                println!("calling write_gen");
-                b.write_general(operation).await;
-            }
-
-            None => {
-                panic!("nothing to see here");
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn test_file_write() {
-        file_write().await;
-    }
+mod tree_tests {
+    use crate::shar::core::tree::{Entry, SharFile};
+    use crate::shar::prelude::CrdtRelation;
+    use std::path::PathBuf;
 
     #[test]
-    fn test_tree_creation() {
-        print!("entered test_tree_creation \n");
-        // initialize the tree using a test.txt file
-        let test_tree = tree::SharDirectory::new(std::path::PathBuf::from(
-            "/home/muna/projects/shario/test_material",
-        ));
-        // let test_tree = tree::SharFile::new("/home/muna/projects/shario/test_material/test.txt");
+    fn add_crdt_adds_a_character_then_a_line_then_a_character() {
+        let file_path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test_material/scratch_add_crdt.txt");
+        std::fs::write(&file_path, "ab").expect("failed to write scratch file");
 
-        let tree_string: String;
+        let mut file = SharFile::new(file_path.clone()).expect("failed to load file");
 
-        match test_tree {
-            Ok(tree) => {
-                tree_string = tree.to_string();
-            }
+        // add a character: append 'c' after 'b' on line 0
+        let c = CrdtRelation::new('c', 2, 0);
+        file.add_crdt(&file_path, (0, 1), 3, 0, &c)
+            .expect("failed to add character");
 
-            Err(e) => {
-                print!("Something went wrong: {e}\n");
-                return;
-            }
-        }
+        // add a line: split right after 'c', pushing everything past it onto a new line
+        let newline = CrdtRelation::new('\n', 3, 0);
+        file.add_crdt(&file_path, (0, 2), 4, 0, &newline)
+            .expect("failed to add line");
 
-        print!("{}\n", tree_string);
+        // add another character onto the new, now-empty second line
+        let d = CrdtRelation::new('d', 4, 0);
+        file.add_crdt(&file_path, (1, 0), 5, 0, &d)
+            .expect("failed to add character to new line");
+
+        std::fs::remove_file(&file_path).expect("failed to delete scratch file");
     }
 }

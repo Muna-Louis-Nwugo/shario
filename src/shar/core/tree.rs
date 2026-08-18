@@ -43,6 +43,16 @@ pub struct SharFile {
     char_counter: u32,
 }
 
+// file_path is local placement, not CRDT state, so it's excluded — two replicas of the same
+// logical file naturally live at different paths, but should compare equal once they converge
+impl PartialEq for SharFile {
+    fn eq(&self, other: &Self) -> bool {
+        self.characters == other.characters
+            && self.projection == other.projection
+            && self.char_counter == other.char_counter
+    }
+}
+
 impl SharFile {
     /// Adds all the contents of a file to the tree.
     fn add_file(&mut self, file_contents: String) {

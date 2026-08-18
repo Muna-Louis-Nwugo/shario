@@ -30,4 +30,45 @@ mod tree_tests {
 
         std::fs::remove_file(&file_path).expect("failed to delete scratch file");
     }
+
+    #[test]
+    fn convergence_two_replicas_different_op_order() {
+        let path_a = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("test_material/scratch_convergence_a.txt");
+        let path_b = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("test_material/scratch_convergence_b.txt");
+        std::fs::write(&path_a, "ab").expect("failed to write scratch file a");
+        std::fs::write(&path_b, "ab").expect("failed to write scratch file b");
+
+        let mut replica_a = SharFile::new(path_a.clone()).expect("failed to load replica a");
+        let mut replica_b = SharFile::new(path_b.clone()).expect("failed to load replica b");
+
+        // two peers concurrently insert after 'b' (id 2, peer 0) without seeing each other's op
+        let op_x = CrdtRelation::new('x', 2, 0); // id 10, peer 1
+        let op_y = CrdtRelation::new('y', 2, 0); // id 7, peer 2
+
+        // replica_a applies them in one order...
+        replica_a
+            .add_crdt(&path_a, 0, 10, 1, &op_x, false)
+            .expect("a: failed to apply x");
+        replica_a
+            .add_crdt(&path_a, 0, 7, 2, &op_y, false)
+            .expect("a: failed to apply y");
+
+        // ...replica_b applies the exact same ops in the opposite order
+        replica_b
+            .add_crdt(&path_b, 0, 7, 2, &op_y, false)
+            .expect("b: failed to apply y");
+        replica_b
+            .add_crdt(&path_b, 0, 10, 1, &op_x, false)
+            .expect("b: failed to apply x");
+
+        assert_eq!(
+            replica_a, replica_b,
+            "replicas diverged after applying the same concurrent ops in different orders"
+        );
+
+        std::fs::remove_file(&path_a).expect("failed to delete scratch file a");
+        std::fs::remove_file(&path_b).expect("failed to delete scratch file b");
+    }
 }

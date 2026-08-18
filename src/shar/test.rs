@@ -14,17 +14,18 @@ mod tree_tests {
 
         // add a character: append 'c' after 'b' on line 0
         let c = CrdtRelation::new('c', 2, 0);
-        file.add_crdt(&file_path, (0, 1), 3, 0, &c, false)
+        file.add_crdt(&file_path, 0, 3, 0, &c, false)
             .expect("failed to add character");
 
         // add a line: split right after 'c', pushing everything past it onto a new line
         let newline = CrdtRelation::new('\n', 3, 0);
-        file.add_crdt(&file_path, (0, 2), 4, 0, &newline, false)
+        file.add_crdt(&file_path, 0, 4, 0, &newline, false)
             .expect("failed to add line");
 
-        // add another character onto the new, now-empty second line
+        // add another character onto the new, now-empty second line — its parent is the
+        // newline itself, which is never in the projection, so this needs start_line: true
         let d = CrdtRelation::new('d', 4, 0);
-        file.add_crdt(&file_path, (1, 0), 5, 0, &d, false)
+        file.add_crdt(&file_path, 1, 5, 0, &d, true)
             .expect("failed to add character to new line");
 
         std::fs::remove_file(&file_path).expect("failed to delete scratch file");

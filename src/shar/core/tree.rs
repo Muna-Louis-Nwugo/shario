@@ -26,7 +26,7 @@ pub trait Entry<T> {
     fn add_crdt(
         &mut self,
         file_path: &PathBuf,
-        coordinates: (usize, usize),
+        line_num: usize,
         id: IdSize,
         peer: PeerIdSize,
         crdt: &CrdtRelation,
@@ -52,7 +52,7 @@ impl SharFile {
 
         let file_path = self.file_path.clone();
         let mut line = 0;
-        let mut col = 0;
+        let mut start_of_line = false;
 
         for (_i, c) in file_contents.char_indices() {
             self.char_counter += 1;
@@ -61,13 +61,13 @@ impl SharFile {
             let relation = CrdtRelation::new(c, id - 1, 0);
 
             // safe to ignore: file_path always matches self's own path during initial load
-            let _ = self.add_crdt(&file_path, (line, col), id, 0, &relation, false);
+            let _ = self.add_crdt(&file_path, line, id, 0, &relation, start_of_line);
 
             if is_line_break(c) {
                 line += 1;
-                col = 0;
+                start_of_line = true;
             } else {
-                col = self.projection[line].len() - 1;
+                start_of_line = false;
             }
         }
     }
@@ -81,7 +81,7 @@ impl SharFile {
     }
 
     // returns the id, peer pair at a specific index
-    fn get_id_peer(&self, coordinates: (usize, usize)) -> Option<(IdSize, PeerIdSize)> {
+    pub fn get_id_peer(&self, coordinates: (usize, usize)) -> Option<(IdSize, PeerIdSize)> {
         if coordinates.0 <= self.projection.len() - 1 {
             let val = self.projection[coordinates.0].get(coordinates.1);
 
@@ -99,6 +99,12 @@ impl SharFile {
     // location and stepping up to the top of the file and down to the bottom of the file to find
     // it
     fn find_parent(&self, line_num: usize, id: IdSize, peer: PeerIdSize) -> Result<(usize, usize)> {
+        // nothing has been added yet, so there's nothing to search for — this must be the root
+        // sentinel parent of the very first character
+        if self.characters.is_empty() {
+            return Ok((0, 0));
+        }
+
         let line = &self.projection[line_num];
 
         if let Some(index) = line.iter().position(|&item| item == (id, peer)) {
@@ -195,7 +201,7 @@ impl Entry<SharFile> for SharFile {
     fn add_crdt(
         &mut self,
         file_path: &PathBuf,
-        coordiantes: (usize, usize),
+        line_num: usize,
         id: IdSize,
         peer: PeerIdSize,
         crdt: &CrdtRelation,
@@ -210,56 +216,73 @@ impl Entry<SharFile> for SharFile {
             return Ok(());
         }
 
-        // add this crdt to the HashMap
-        let relation = crdt.clone();
-        self.characters.insert((id, peer), relation);
+        // the first character of a line has no real projected predecessor to look up (its
+        // parent may be a newline, which is deliberately never stored in the projection) — the
+        // line itself is already known, so there's nothing to search for
+        let parent = if start_line {
+            Ok((line_num, 0))
+        } else {
+            self.find_parent(line_num, crdt.parent_id, crdt.parent_peer)
+        };
 
-        let insertion_value = (id, peer);
+        match parent {
+            Ok(coordinates) => {
+                // add this crdt to the HashMap
+                let relation = crdt.clone();
+                self.characters.insert((id, peer), relation);
 
-        // if this is a new line, split the projection here instead of inserting a character
-        if is_line_break(crdt.value) {
-            self.add_line_to_projection(coordiantes);
-            return Ok(());
-        }
+                let insertion_value = (id, peer);
 
-        // an empty line has no siblings to compare against, so the new character is simply
-        // the only thing on it
-        if self.projection[coordiantes.0].is_empty() {
-            self.projection[coordiantes.0].push(insertion_value);
-            return Ok(());
-        }
+                // if this is a new line, split the projection here instead of inserting a character
+                if is_line_break(crdt.value) {
+                    self.add_line_to_projection(coordinates);
+                    return Ok(());
+                }
 
-        // characters at the very front of a line have no preceding sibling to anchor on, so
-        // start the walk at the first element instead of the element after `coordiantes.1`
-        let mut insert_at = if start_line { 0 } else { coordiantes.1 + 1 };
+                // an empty line has no siblings to compare against, so the new character is simply
+                // the only thing on it
+                if self.projection[coordinates.0].is_empty() {
+                    self.projection[coordinates.0].push(insertion_value);
+                    return Ok(());
+                }
 
-        // walk forward comparing against each sibling candidate, stopping as soon as we find
-        // where this CRDT belongs (running off the end of the line just falls out of the loop,
-        // and inserting at that index is equivalent to pushing)
-        while let Some(candidate) = self.projection[coordiantes.0].get(insert_at) {
-            let candidate_info = (
-                self.characters[candidate].parent_id,
-                self.characters[candidate].parent_peer,
-            );
+                // characters at the very front of a line have no preceding sibling to anchor on, so
+                // start the walk at the first element instead of the element after `coordinates.1`
+                let mut insert_at = if start_line { 0 } else { coordinates.1 + 1 };
 
-            if candidate_info != (crdt.parent_id, crdt.parent_peer) {
-                // the candidate isn't a sibling of this CRDT — insert here
-                break;
-            } else if candidate.0 < id {
-                // same parent but a smaller id — this CRDT comes first
-                break;
-            } else if candidate.0 == id && candidate.1 >= peer {
-                // same id, and the peer id of what's already there is greater than or equal to
-                // this peer id — assume whoever made this joined first, so it goes first
-                break;
+                // walk forward comparing against each sibling candidate, stopping as soon as we find
+                // where this CRDT belongs (running off the end of the line just falls out of the loop,
+                // and inserting at that index is equivalent to pushing)
+                while let Some(candidate) = self.projection[coordinates.0].get(insert_at) {
+                    let candidate_info = (
+                        self.characters[candidate].parent_id,
+                        self.characters[candidate].parent_peer,
+                    );
+
+                    if candidate_info != (crdt.parent_id, crdt.parent_peer) {
+                        // the candidate isn't a sibling of this CRDT — insert here
+                        break;
+                    } else if candidate.0 < id {
+                        // same parent but a smaller id — this CRDT comes first
+                        break;
+                    } else if candidate.0 == id && candidate.1 >= peer {
+                        // same id, and the peer id of what's already there is greater than or equal to
+                        // this peer id — assume whoever made this joined first, so it goes first
+                        break;
+                    }
+
+                    insert_at += 1;
+                }
+
+                self.projection[coordinates.0].insert(insert_at, insertion_value);
+
+                Ok(())
             }
 
-            insert_at += 1;
+            Err(_e) => Err(Error::OutOfBounds(String::from(
+                "parent could not be found",
+            ))),
         }
-
-        self.projection[coordiantes.0].insert(insert_at, insertion_value);
-
-        Ok(())
     }
 }
 
@@ -317,7 +340,7 @@ impl Entry<SharDirectory> for SharDirectory {
     fn add_crdt(
         &mut self,
         _file_path: &PathBuf,
-        _coordiantes: (usize, usize),
+        _line_num: usize,
         _id: IdSize,
         _peer: PeerIdSize,
         _crdt: &CrdtRelation,

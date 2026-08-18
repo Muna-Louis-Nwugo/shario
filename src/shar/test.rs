@@ -32,7 +32,7 @@ mod tree_tests {
     }
 
     #[test]
-    fn convergence_two_replicas_different_op_order() {
+    fn test_convergence() {
         let path_a = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("test_material/scratch_convergence_a.txt");
         let path_b = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -70,5 +70,39 @@ mod tree_tests {
 
         std::fs::remove_file(&path_a).expect("failed to delete scratch file a");
         std::fs::remove_file(&path_b).expect("failed to delete scratch file b");
+    }
+
+    #[test]
+    fn test_get_id_peer() {
+        let file_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("test_material/scratch_get_id_peer.txt");
+        std::fs::write(&file_path, "ab").expect("failed to write scratch file");
+
+        let mut file = SharFile::new(file_path.clone()).expect("failed to load file");
+
+        // known positions on the one line loaded so far
+        assert_eq!(file.get_id_peer((0, 0)), Some((1, 0)), "'a' should be at (0, 0)");
+        assert_eq!(file.get_id_peer((0, 1)), Some((2, 0)), "'b' should be at (0, 1)");
+
+        // out of bounds in either dimension is None, not a panic
+        assert_eq!(file.get_id_peer((0, 2)), None, "line 0 only has 2 characters");
+        assert_eq!(file.get_id_peer((5, 0)), None, "there's only one line");
+
+        // the id/peer this returns has to be usable as a real parent reference: look up 'b',
+        // use it as the parent for a new character, and confirm it lands right after 'b'
+        let (parent_id, parent_peer) = file
+            .get_id_peer((0, 1))
+            .expect("'b' should still be there");
+        let c = CrdtRelation::new('c', parent_id, parent_peer);
+        file.add_crdt(&file_path, 0, 3, 0, &c, false)
+            .expect("failed to add character using looked-up parent");
+
+        assert_eq!(
+            file.get_id_peer((0, 2)),
+            Some((3, 0)),
+            "'c' should have landed right after 'b'"
+        );
+
+        std::fs::remove_file(&file_path).expect("failed to delete scratch file");
     }
 }

@@ -309,10 +309,17 @@ impl Entry<SharFile> for SharFile {
         let id = crdt.id;
         let peer = crdt.peer;
         let relation = &crdt.relation;
+        let parent_exists: bool;
 
         // a retry/resend of an op we've already applied is a no-op, not a duplicate insert
         if self.characters.contains_key(&(id, peer)) {
             return Ok(());
+        }
+
+        if !self.characters.is_empty() {
+            parent_exists = !self.characters[&(relation.parent_id, relation.parent_peer)].deleted;
+        } else {
+            parent_exists = true;
         }
 
         // the first character of a line has no real projected predecessor to look up (its
@@ -321,7 +328,11 @@ impl Entry<SharFile> for SharFile {
         let parent = if start_line {
             Ok((line_num, 0))
         } else {
-            self.find_crdt(line_num, relation.parent_id, relation.parent_peer)
+            if parent_exists {
+                self.find_crdt(line_num, relation.parent_id, relation.parent_peer)
+            } else {
+                self.find_tombstone(line_num, relation.parent_id, relation.parent_peer)
+            }
         };
 
         match parent {
@@ -349,6 +360,10 @@ impl Entry<SharFile> for SharFile {
                 let range: usize;
                 if start_line {
                     start = 0;
+                    offset = 0;
+                    range = self.projection[coordinates.0].len() + 1;
+                } else if !parent_exists {
+                    start = coordinates.1;
                     offset = 0;
                     range = self.projection[coordinates.0].len() + 1;
                 } else {

@@ -9,6 +9,14 @@ use std::path::PathBuf;
 //
 // (value, parent_id, parent_peer_id)
 
+/// Characters that end a projection line rather than occupying a column in one.
+fn is_line_break(c: char) -> bool {
+    matches!(
+        c,
+        '\n' | '\r' | '\u{0B}' | '\u{0C}' | '\u{85}' | '\u{2028}' | '\u{2029}'
+    )
+}
+
 // Behaviours for structs representing file system or directory names
 pub trait Entry<T> {
     fn new(file_path: PathBuf) -> Result<T>;
@@ -37,23 +45,28 @@ impl SharFile {
     fn add_file(&mut self, file_contents: String) {
         // the shar specification states that peer 0 is reserved for the char itself to add to the
         // tree as necessary
+        self.projection.push(Vec::new());
+
+        let file_path = self.file_path.clone();
+        let mut line = 0;
+        let mut col = 0;
 
         for (_i, c) in file_contents.char_indices() {
             self.char_counter += 1;
+            let id = self.char_counter;
 
-            let relation = CrdtRelation::new(c, self.char_counter - 1, 0);
+            let relation = CrdtRelation::new(c, id - 1, 0);
 
-            self.characters.insert((self.char_counter, 0), relation);
+            // safe to ignore: file_path always matches self's own path during initial load
+            let _ = self.add_crdt(&file_path, (line, col), id, 0, &relation);
+
+            if is_line_break(c) {
+                line += 1;
+                col = 0;
+            } else {
+                col = self.projection[line].len() - 1;
+            }
         }
-    }
-
-    fn update_projection(
-        &mut self,
-        relation: CrdtRelation,
-        value: Value,
-        id: IdSize,
-        peer_id: PeerIdSize,
-    ) {
     }
 
     /// Splits a projection line in two right after `coordinates`, so the element at
@@ -113,11 +126,15 @@ impl Entry<SharFile> for SharFile {
         let insertion_value = (id, peer);
 
         // if this is a new line, split the projection here instead of inserting a character
-        if matches!(
-            crdt.value,
-            '\n' | '\r' | '\u{0B}' | '\u{0C}' | '\u{85}' | '\u{2028}' | '\u{2029}'
-        ) {
+        if is_line_break(crdt.value) {
             self.add_line_to_projection(coordiantes);
+            return Ok(());
+        }
+
+        // an empty line has no siblings to compare against, so the new character is simply
+        // the only thing on it
+        if self.projection[coordiantes.0].is_empty() {
+            self.projection[coordiantes.0].push(insertion_value);
             return Ok(());
         }
 

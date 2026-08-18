@@ -110,7 +110,7 @@ impl SharFile {
             let mut down_exhausted = false;
 
             let mut check_up = || {
-                if line_num - up_offset < 0 {
+                if line_num < up_offset {
                     return Err(Error::OutOfBounds(String::from("up exhausted")));
                 } else {
                     let current_line = &self.projection[line_num - up_offset];
@@ -137,7 +137,7 @@ impl SharFile {
                 }
             };
 
-            while up_exhausted != true && down_exhausted != true {
+            while up_exhausted != true || down_exhausted != true {
                 match check_up() {
                     Ok((row, col)) => return Ok((row, col)),
 

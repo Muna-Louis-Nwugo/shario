@@ -182,6 +182,89 @@ impl SharFile {
             Err(Error::OutOfBounds(String::from("parent cannot be found")))
         }
     }
+
+    // finds where a tombstone would have been recursively
+    fn find_tombstone(
+        &self,
+        line_num: usize,
+        id: IdSize,
+        peer: PeerIdSize,
+    ) -> Result<(usize, usize)> {
+        let crdt = self.characters.get(&(id, peer));
+
+        match crdt {
+            Some(relation) => {
+                if let Some(parent) = self
+                    .characters
+                    .get(&(relation.parent_id, relation.parent_peer))
+                {
+                    let coordinates: (usize, usize);
+                    let offset: usize;
+                    let range: usize;
+                    if parent.deleted {
+                        coordinates = self.find_tombstone(
+                            line_num,
+                            relation.parent_id,
+                            relation.parent_peer,
+                        )?;
+                        offset = 0;
+                        range = self.projection[coordinates.0].len() + 1;
+                    } else {
+                        coordinates =
+                            self.find_crdt(line_num, relation.parent_id, relation.parent_peer)?;
+                        offset = 1;
+                        range = self.projection[coordinates.0].len();
+                    }
+
+                    // figure out where it goes in the projection
+                    for j in coordinates.1..range {
+                        // if the next element in the line exists
+                        if let Some(next_element) = self.projection[coordinates.0].get(j + offset) {
+                            let next_info = (
+                                self.characters[next_element].parent_id,
+                                self.characters[next_element].parent_peer,
+                            );
+
+                            if next_info != (relation.parent_id, relation.parent_peer) {
+                                // if the next element doesn't have the same parent, just return
+                                // this one
+                                return Ok((coordinates.0, j + offset));
+                            } else if next_element.0 < id {
+                                // if the next element has the same parent but a smaller id, return
+                                // this one
+                                return Ok((coordinates.0, j + offset));
+                            } else if next_element.0 == id {
+                                // if the ids are equal, move on to the peer ids
+
+                                // if the peer id  of what's already there is less than this peer
+                                // id, that implies that it was made by someone who joined earlier.
+                                // In this case, move on to the next value
+                                if next_element.1 < peer {
+                                    continue;
+                                }
+                                // if the peer id of what's already there is less than or (god
+                                // forbid) equal to this peer id, then assume who made this joined
+                                // first and return this one
+                                else {
+                                    return Ok((coordinates.0, j + offset));
+                                }
+                            }
+                        } else {
+                            // just put to the end of the line, assuming next element doesn't exist because
+                            // we're at the end
+                            return Ok((coordinates.0, j + offset));
+                        }
+                    }
+
+                    Ok((0, 0))
+                } else {
+                    return Err(Error::Generic(String::from("tombstone not found")));
+                }
+            }
+
+            None => return Err(Error::Generic(String::from("tombstone not found"))),
+        }
+    }
 }
 impl Entry<SharFile> for SharFile {
     // TODO: Tree traversal to reconstruct file
@@ -261,35 +344,61 @@ impl Entry<SharFile> for SharFile {
                     return Ok(());
                 }
 
-                // characters at the very front of a line have no preceding sibling to anchor on, so
-                // start the walk at the first element instead of the element after `coordinates.1`
-                let mut insert_at = if start_line { 0 } else { coordinates.1 + 1 };
-
-                // walk forward comparing against each sibling candidate, stopping as soon as we find
-                // where this CRDT belongs (running off the end of the line just falls out of the loop,
-                // and inserting at that index is equivalent to pushing)
-                while let Some(candidate) = self.projection[coordinates.0].get(insert_at) {
-                    let candidate_info = (
-                        self.characters[candidate].parent_id,
-                        self.characters[candidate].parent_peer,
-                    );
-
-                    if candidate_info != (relation.parent_id, relation.parent_peer) {
-                        // the candidate isn't a sibling of this CRDT — insert here
-                        break;
-                    } else if candidate.0 < id {
-                        // same parent but a smaller id — this CRDT comes first
-                        break;
-                    } else if candidate.0 == id && candidate.1 >= peer {
-                        // same id, and the peer id of what's already there is greater than or equal to
-                        // this peer id — assume whoever made this joined first, so it goes first
-                        break;
-                    }
-
-                    insert_at += 1;
+                let start: usize;
+                let offset: usize;
+                let range: usize;
+                if start_line {
+                    start = 0;
+                    offset = 0;
+                    range = self.projection[coordinates.0].len() + 1;
+                } else {
+                    start = coordinates.1;
+                    offset = 1;
+                    range = self.projection[coordinates.0].len();
                 }
 
-                self.projection[coordinates.0].insert(insert_at, insertion_value);
+                // figure out where it goes in the projection
+                for j in start..range {
+                    // if the next element in the line exists
+                    if let Some(next_element) = self.projection[coordinates.0].get(j + offset) {
+                        let next_info = (
+                            self.characters[next_element].parent_id,
+                            self.characters[next_element].parent_peer,
+                        );
+
+                        if next_info != (relation.parent_id, relation.parent_peer) {
+                            // if the next element doesn't have the same parent, just insert this one next
+                            self.projection[coordinates.0].insert(j + offset, insertion_value);
+                            break;
+                        } else if next_element.0 < id {
+                            // if the next element has the same parent but a smaller id, put this one
+                            // first
+                            self.projection[coordinates.0].insert(j + offset, insertion_value);
+                            break;
+                        } else if next_element.0 == id {
+                            // if the ids are equal, move on to the peer ids
+                            //
+
+                            // if the peer id  of what's already there is less than this peer
+                            // id, that implies that it was made by someone who joined earlier.
+                            // In this case, move on to the next value
+                            if next_element.1 < peer {
+                                continue;
+                            }
+                            // if the peer id of what's already there is less than or (god
+                            // forbid) equal to this peer id, then assume who made this joined
+                            // first and insert insert the CRDT
+                            else {
+                                self.projection[coordinates.0].insert(j + offset, insertion_value);
+                                break;
+                            }
+                        }
+                    } else {
+                        // just put to the end of the line, assuming next element doesn't exist because
+                        // we're at the end
+                        self.projection[coordinates.0].push((id, peer));
+                    }
+                }
 
                 Ok(())
             }
@@ -401,10 +510,10 @@ impl Entry<SharDirectory> for SharDirectory {
 
     fn remove_crdt(
         &mut self,
-        file_path: &PathBuf,
-        line_num: usize,
-        id: IdSize,
-        peer: PeerIdSize,
+        _file_path: &PathBuf,
+        _line_num: usize,
+        _id: IdSize,
+        _peer: PeerIdSize,
     ) -> Result<()> {
         Ok(())
     }

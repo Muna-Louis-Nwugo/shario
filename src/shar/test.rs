@@ -105,4 +105,34 @@ mod tree_tests {
 
         std::fs::remove_file(&file_path).expect("failed to delete scratch file");
     }
+
+    #[test]
+    fn test_front_of_line_insert_ordering() {
+        let file_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("test_material/scratch_front_of_line.txt");
+        std::fs::write(&file_path, "").expect("failed to write scratch file");
+
+        let mut file = SharFile::new(file_path.clone()).expect("failed to load file");
+
+        // two front-of-line inserts under the same (fictitious) parent, in descending id
+        // order — the second one has to walk past the first and land right after it, which
+        // requires the walk to actually reach the end of the line instead of running out of
+        // range before it gets there
+        let a = CRDT::new(30, 0, CrdtRelation::new('a', 99, 0));
+        file.add_crdt(&file_path, 0, &a, true)
+            .expect("failed to add first front-of-line character");
+
+        let b = CRDT::new(20, 0, CrdtRelation::new('b', 99, 0));
+        file.add_crdt(&file_path, 0, &b, true)
+            .expect("failed to add second front-of-line character");
+
+        assert_eq!(file.get_id_peer((0, 0)), Some((30, 0)));
+        assert_eq!(
+            file.get_id_peer((0, 1)),
+            Some((20, 0)),
+            "second front-of-line sibling should land right after the first, not be dropped"
+        );
+
+        std::fs::remove_file(&file_path).expect("failed to delete scratch file");
+    }
 }

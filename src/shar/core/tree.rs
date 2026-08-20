@@ -3,7 +3,7 @@ use std::fmt;
 
 use crate::shar::prelude::*;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 // A vector representation of a file's line. Each element is a decomposed CRDT in tuple form:
 //
@@ -68,7 +68,8 @@ impl SharFile {
 
         let file_path = self.file_path.clone();
         let mut line = 0;
-        let mut start_of_line = false;
+        let mut start_of_line;
+        let mut prev: char = char::from(0);
 
         for (_i, c) in file_contents.char_indices() {
             self.char_counter += 1;
@@ -76,15 +77,16 @@ impl SharFile {
 
             let crdt = CRDT::new(id, 0, CrdtRelation::new(c, id - 1, 0));
 
+            start_of_line = is_line_break(prev);
+
             // safe to ignore: file_path always matches self's own path during initial load
             let _ = self.add_crdt(&file_path, line, &crdt, start_of_line);
 
             if is_line_break(c) {
                 line += 1;
-                start_of_line = true;
-            } else {
-                start_of_line = false;
             }
+
+            prev = c;
         }
     }
 
@@ -92,6 +94,11 @@ impl SharFile {
     /// `coordinates.1` stays the last element of the original line. If `coordinates.1`
     /// is already the last index in the line, this just appends a new empty line after it.
     fn add_line_to_projection(&mut self, coordinates: (usize, usize)) {
+        if self.projection[coordinates.0].is_empty() {
+            self.projection.insert(coordinates.0 + 1, Vec::new());
+            return;
+        }
+
         let new_line = self.projection[coordinates.0].split_off(coordinates.1 + 1);
         self.projection.insert(coordinates.0 + 1, new_line);
     }

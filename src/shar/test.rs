@@ -13,25 +13,35 @@ mod tree_tests {
             .join("test_material/scratch_add_crdt_dir");
         std::fs::create_dir_all(&dir_path).expect("failed to create scratch dir");
         let file_path = dir_path.join("scratch.txt");
-        std::fs::write(&file_path, "ab").expect("failed to write scratch file");
+
+        // deliberately messy, multi-line, mixed-script content — doesn't need to be
+        // coherent, just needs to give the ring search several lines to actually search
+        // through instead of finding things on the first try
+        let content = "The quick brown fox jumps?! 123 @#$%^&*()_+-=\n\u{c9}lan caf\u{e9} \u{2014} na\u{ef}ve r\u{e9}sum\u{e9}, d\u{e9}j\u{e0} vu\n\u{65e5}\u{672c}\u{8a9e}\u{306e}\u{30c6}\u{30b9}\u{30c8}\u{6587}\u{3067}\u{3059}\n\n\tTabbed\t\tline\twith\ttabs\n...   lots   of    spaces   ...\nemoji test \u{1f389}\u{1f680} done\nFINAL_LINE_END";
+        std::fs::write(&file_path, content).expect("failed to write scratch file");
 
         let mut dir = SharDirectory::new(dir_path.clone()).expect("failed to load directory");
 
-        // add a character: append 'c' after 'b' on line 0
-        let c = CRDT::new(3, 0, CrdtRelation::new('c', 2, 0));
-        dir.add_crdt(&file_path, 0, &c, false)
-            .expect("failed to add character");
+        // add_file assigns ids 1..=n in char order, so the very last character loaded has
+        // id == total char count, sitting on the last (8th, index 7) line
+        let last_id = content.chars().count() as u32;
 
-        // add a line: split right after 'c', pushing everything past it onto a new line
-        let newline = CRDT::new(4, 0, CrdtRelation::new('\n', 3, 0));
+        // append a character after the very last character — hint line 0 on purpose, so
+        // the ring search has to walk all the way down to line 7 to find it
+        let extra = CRDT::new(last_id + 1, 0, CrdtRelation::new('!', last_id, 0));
+        dir.add_crdt(&file_path, 0, &extra, false)
+            .expect("failed to append after the last character");
+
+        // split a new line right after that character
+        let newline = CRDT::new(last_id + 2, 0, CrdtRelation::new('\n', last_id + 1, 0));
         dir.add_crdt(&file_path, 0, &newline, false)
-            .expect("failed to add line");
+            .expect("failed to add a line at the end");
 
-        // add another character onto the new, now-empty second line — its parent is the
-        // newline itself, which is never in the projection, so this needs start_line: true
-        let d = CRDT::new(5, 0, CrdtRelation::new('d', 4, 0));
-        dir.add_crdt(&file_path, 1, &d, true)
-            .expect("failed to add character to new line");
+        // add the first character of the freshly-created line (line 8) — its parent is
+        // the newline, which is never in the projection, so this needs start_line: true
+        let last_char = CRDT::new(last_id + 3, 0, CrdtRelation::new('X', last_id + 2, 0));
+        dir.add_crdt(&file_path, 8, &last_char, true)
+            .expect("failed to add character to the new final line");
 
         std::fs::remove_file(&file_path).expect("failed to delete scratch file");
         std::fs::remove_dir(&dir_path).expect("failed to delete scratch dir");
@@ -43,15 +53,28 @@ mod tree_tests {
             .join("test_material/scratch_convergence_a.txt");
         let path_b = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("test_material/scratch_convergence_b.txt");
-        std::fs::write(&path_a, "ab").expect("failed to write scratch file a");
-        std::fs::write(&path_b, "ab").expect("failed to write scratch file b");
+        let path_c = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("test_material/scratch_convergence_c.txt");
+
+        // same messy multi-line/mixed-script content, loaded independently into three
+        // separate replicas
+        let content = "Lorem ipsum dolor sit amet, consectetur 42! \u{393}\u{3b5}\u{3b9}\u{3ac} \u{3c3}\u{3bf}\u{3c5} \u{3ba}\u{3cc}\u{3c3}\u{3bc}\u{3b5} \u{2014} \u{43f}\u{440}\u{438}\u{432}\u{435}\u{442} \u{43c}\u{438}\u{440}\n\t\tmixed\ttabs   and    spaces\nlast line no newline";
+        std::fs::write(&path_a, content).expect("failed to write scratch file a");
+        std::fs::write(&path_b, content).expect("failed to write scratch file b");
+        std::fs::write(&path_c, content).expect("failed to write scratch file c");
 
         let mut replica_a = SharFile::new(path_a.clone()).expect("failed to load replica a");
         let mut replica_b = SharFile::new(path_b.clone()).expect("failed to load replica b");
+        let mut replica_c = SharFile::new(path_c.clone()).expect("failed to load replica c");
 
-        // two peers concurrently insert after 'b' (id 2, peer 0) without seeing each other's op
-        let op_x = CRDT::new(10, 1, CrdtRelation::new('x', 2, 0));
-        let op_y = CRDT::new(7, 2, CrdtRelation::new('y', 2, 0));
+        // the very last real character in the file — three peers concurrently insert
+        // after it without seeing each other's ops. Chosen to exercise more than one
+        // tie-break branch: x and y share the same id but different peers, z has a
+        // smaller id than both
+        let anchor_id = content.chars().count() as u32;
+        let op_x = CRDT::new(500, 1, CrdtRelation::new('X', anchor_id, 0));
+        let op_y = CRDT::new(500, 2, CrdtRelation::new('Y', anchor_id, 0));
+        let op_z = CRDT::new(300, 5, CrdtRelation::new('Z', anchor_id, 0));
 
         // replica_a applies them in one order...
         replica_a
@@ -60,8 +83,14 @@ mod tree_tests {
         replica_a
             .add_crdt(&path_a, 0, &op_y, false)
             .expect("a: failed to apply y");
+        replica_a
+            .add_crdt(&path_a, 0, &op_z, false)
+            .expect("a: failed to apply z");
 
-        // ...replica_b applies the exact same ops in the opposite order
+        // ...replica_b applies them in the reverse order...
+        replica_b
+            .add_crdt(&path_b, 0, &op_z, false)
+            .expect("b: failed to apply z");
         replica_b
             .add_crdt(&path_b, 0, &op_y, false)
             .expect("b: failed to apply y");
@@ -69,44 +98,70 @@ mod tree_tests {
             .add_crdt(&path_b, 0, &op_x, false)
             .expect("b: failed to apply x");
 
+        // ...and replica_c applies them in yet another order
+        replica_c
+            .add_crdt(&path_c, 0, &op_y, false)
+            .expect("c: failed to apply y");
+        replica_c
+            .add_crdt(&path_c, 0, &op_x, false)
+            .expect("c: failed to apply x");
+        replica_c
+            .add_crdt(&path_c, 0, &op_z, false)
+            .expect("c: failed to apply z");
+
         assert_eq!(
             replica_a, replica_b,
-            "replicas diverged after applying the same concurrent ops in different orders"
+            "replica a and b diverged after applying the same concurrent ops in different orders"
+        );
+        assert_eq!(
+            replica_b, replica_c,
+            "replica b and c diverged after applying the same concurrent ops in different orders"
         );
 
         std::fs::remove_file(&path_a).expect("failed to delete scratch file a");
         std::fs::remove_file(&path_b).expect("failed to delete scratch file b");
+        std::fs::remove_file(&path_c).expect("failed to delete scratch file c");
     }
 
     #[test]
     fn test_get_id_peer() {
         let file_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("test_material/scratch_get_id_peer.txt");
-        std::fs::write(&file_path, "ab").expect("failed to write scratch file");
+        // four lines of 9 characters each (except the last), no trailing newline
+        let content = "abc123!@#\ndef456$%^\nghi789&*(\nLAST";
+        std::fs::write(&file_path, content).expect("failed to write scratch file");
 
         let mut file = SharFile::new(file_path.clone()).expect("failed to load file");
 
-        // known positions on the one line loaded so far
+        // spot-check known positions across every line, not just the first
         assert_eq!(file.get_id_peer((0, 0)), Some((1, 0)), "'a' should be at (0, 0)");
-        assert_eq!(file.get_id_peer((0, 1)), Some((2, 0)), "'b' should be at (0, 1)");
+        assert_eq!(file.get_id_peer((0, 8)), Some((9, 0)), "'#' should be at (0, 8)");
+        assert_eq!(file.get_id_peer((1, 0)), Some((11, 0)), "'d' should be at (1, 0)");
+        assert_eq!(file.get_id_peer((1, 8)), Some((19, 0)), "'^' should be at (1, 8)");
+        assert_eq!(file.get_id_peer((2, 0)), Some((21, 0)), "'g' should be at (2, 0)");
+        assert_eq!(file.get_id_peer((2, 8)), Some((29, 0)), "'(' should be at (2, 8)");
+        assert_eq!(file.get_id_peer((3, 0)), Some((31, 0)), "'L' should be at (3, 0)");
+        assert_eq!(file.get_id_peer((3, 3)), Some((34, 0)), "'T' should be at (3, 3)");
 
         // out of bounds in either dimension is None, not a panic
-        assert_eq!(file.get_id_peer((0, 2)), None, "line 0 only has 2 characters");
-        assert_eq!(file.get_id_peer((5, 0)), None, "there's only one line");
+        assert_eq!(file.get_id_peer((0, 9)), None, "line 0 only has 9 characters");
+        assert_eq!(file.get_id_peer((3, 4)), None, "line 3 only has 4 characters");
+        assert_eq!(file.get_id_peer((10, 0)), None, "there are only 4 lines");
 
-        // the id/peer this returns has to be usable as a real parent reference: look up 'b',
-        // use it as the parent for a new character, and confirm it lands right after 'b'
+        // the id/peer this returns has to be usable as a real parent reference: look up
+        // the last character of the last line, use it as a parent, and confirm the new
+        // character lands right after it
         let (parent_id, parent_peer) = file
-            .get_id_peer((0, 1))
-            .expect("'b' should still be there");
-        let c = CRDT::new(3, 0, CrdtRelation::new('c', parent_id, parent_peer));
-        file.add_crdt(&file_path, 0, &c, false)
+            .get_id_peer((3, 3))
+            .expect("'T' should still be there");
+        let c = CRDT::new(35, 0, CrdtRelation::new('!', parent_id, parent_peer));
+        file.add_crdt(&file_path, 3, &c, false)
             .expect("failed to add character using looked-up parent");
 
         assert_eq!(
-            file.get_id_peer((0, 2)),
-            Some((3, 0)),
-            "'c' should have landed right after 'b'"
+            file.get_id_peer((3, 4)),
+            Some((35, 0)),
+            "'!' should have landed right after 'T'"
         );
 
         std::fs::remove_file(&file_path).expect("failed to delete scratch file");
@@ -116,29 +171,43 @@ mod tree_tests {
     fn test_front_of_line_insert_ordering() {
         let file_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("test_material/scratch_front_of_line.txt");
-        // "z\n" gives a real newline (id 2) whose child line (line 1) starts out empty
-        std::fs::write(&file_path, "z\n").expect("failed to write scratch file");
+        // messy first line ending in a real newline (id == char count), whose child
+        // line (line 1) starts out empty
+        let content = "some prefix line !@# \u{1f600} 123\n";
+        std::fs::write(&file_path, content).expect("failed to write scratch file");
 
         let mut file = SharFile::new(file_path.clone()).expect("failed to load file");
 
-        // two front-of-line inserts on line 1, parented on the real newline that created
-        // it (id 2), in descending id order — the second one has to walk past the first
-        // and land right after it, which requires the walk to actually reach the end of
-        // the line instead of running out of range before it gets there
-        let a = CRDT::new(30, 0, CrdtRelation::new('a', 2, 0));
-        file.add_crdt(&file_path, 1, &a, true)
-            .expect("failed to add first front-of-line character");
+        let newline_id = content.chars().count() as u32;
+        let new_line = 1;
 
-        let b = CRDT::new(20, 0, CrdtRelation::new('b', 2, 0));
-        file.add_crdt(&file_path, 1, &b, true)
-            .expect("failed to add second front-of-line character");
+        // four front-of-line inserts, applied in a deliberately scrambled (non-sorted)
+        // order, all parented on the same real newline — final order must still be
+        // strictly descending by id regardless of application order, which means each
+        // one has to correctly walk past however many are already there. Ids are chosen
+        // comfortably above the file's own real character count so none of them collide
+        // with (and get silently no-op'd against) real content already loaded
+        let a = CRDT::new(1050, 0, CrdtRelation::new('a', newline_id, 0));
+        file.add_crdt(&file_path, new_line, &a, true)
+            .expect("failed to add front-of-line character 'a'");
 
-        assert_eq!(file.get_id_peer((1, 0)), Some((30, 0)));
-        assert_eq!(
-            file.get_id_peer((1, 1)),
-            Some((20, 0)),
-            "second front-of-line sibling should land right after the first, not be dropped"
-        );
+        let b = CRDT::new(1010, 0, CrdtRelation::new('b', newline_id, 0));
+        file.add_crdt(&file_path, new_line, &b, true)
+            .expect("failed to add front-of-line character 'b'");
+
+        let c = CRDT::new(1999, 0, CrdtRelation::new('c', newline_id, 0));
+        file.add_crdt(&file_path, new_line, &c, true)
+            .expect("failed to add front-of-line character 'c'");
+
+        let d = CRDT::new(1500, 0, CrdtRelation::new('d', newline_id, 0));
+        file.add_crdt(&file_path, new_line, &d, true)
+            .expect("failed to add front-of-line character 'd'");
+
+        // final order must be strictly descending: 1999, 1500, 1050, 1010
+        assert_eq!(file.get_id_peer((new_line, 0)), Some((1999, 0)));
+        assert_eq!(file.get_id_peer((new_line, 1)), Some((1500, 0)));
+        assert_eq!(file.get_id_peer((new_line, 2)), Some((1050, 0)));
+        assert_eq!(file.get_id_peer((new_line, 3)), Some((1010, 0)));
 
         std::fs::remove_file(&file_path).expect("failed to delete scratch file");
     }
@@ -152,30 +221,38 @@ mod tree_tests {
             .join("test_material/scratch_remove_crdt_dir");
         std::fs::create_dir_all(&dir_path).expect("failed to create scratch dir");
         let file_path = dir_path.join("scratch.txt");
-        std::fs::write(&file_path, "ab").expect("failed to write scratch file");
+        let content =
+            "chain: a-b-c-d-e-f end of chain, more filler text here 12345 \u{2603}\u{2764}\u{fe0f}";
+        std::fs::write(&file_path, content).expect("failed to write scratch file");
 
         let mut dir = SharDirectory::new(dir_path.clone()).expect("failed to load directory");
 
-        // remove 'b' (id 2, peer 0)
-        dir.remove_crdt(&file_path, 0, 2, 0)
-            .expect("failed to remove character");
+        // ids 10, 11, 12 are three real, consecutive characters (each one's parent is
+        // the one before it, per add_file's sequential chain) — tombstone all three to
+        // build an actual multi-level tombstone chain, not just a single removed node
+        dir.remove_crdt(&file_path, 0, 10, 0)
+            .expect("failed to remove first character in the chain");
+        dir.remove_crdt(&file_path, 0, 11, 0)
+            .expect("failed to remove second character in the chain");
+        dir.remove_crdt(&file_path, 0, 12, 0)
+            .expect("failed to remove third character in the chain");
 
-        // retrying the same removal is a no-op, not an error
-        dir.remove_crdt(&file_path, 0, 2, 0)
+        // retrying an already-removed one is a no-op, not an error
+        dir.remove_crdt(&file_path, 0, 11, 0)
             .expect("failed to no-op a repeated removal");
 
         // removing something that was never added at all is an error
         assert!(
-            dir.remove_crdt(&file_path, 0, 99, 0).is_err(),
+            dir.remove_crdt(&file_path, 0, 999_999, 0).is_err(),
             "removing a nonexistent crdt should fail, not succeed"
         );
 
-        // adding a character parented on the now-tombstoned 'b' exercises find_tombstone
-        // through the directory routing too — 'b's own parent ('a') is still live, so this
-        // should resolve and succeed
-        let c = CRDT::new(3, 0, CrdtRelation::new('c', 2, 0));
-        dir.add_crdt(&file_path, 0, &c, false)
-            .expect("failed to add a character parented on a tombstone");
+        // add a character parented on the deepest tombstone (id 12) — resolving this has
+        // to climb all three tombstoned levels back to the nearest live ancestor (id 9),
+        // exercising find_tombstone's recursion through the full directory-routed path
+        let new_char = CRDT::new(999, 0, CrdtRelation::new('!', 12, 0));
+        dir.add_crdt(&file_path, 0, &new_char, false)
+            .expect("failed to add a character parented on a 3-deep tombstone chain");
 
         std::fs::remove_file(&file_path).expect("failed to delete scratch file");
         std::fs::remove_dir(&dir_path).expect("failed to delete scratch dir");

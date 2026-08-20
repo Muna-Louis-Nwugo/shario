@@ -3,7 +3,7 @@ use std::fmt;
 
 use crate::shar::prelude::*;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 // A vector representation of a file's line. Each element is a decomposed CRDT in tuple form:
 //
@@ -63,6 +63,8 @@ impl SharFile {
         // the shar specification states that peer 0 is reserved for the char itself to add to the
         // tree as necessary
         self.projection.push(Vec::new());
+        self.characters
+            .insert((0, 0), CrdtRelation::new(char::from(0), 0, 0));
 
         let file_path = self.file_path.clone();
         let mut line = 0;
@@ -115,7 +117,7 @@ impl SharFile {
     fn find_crdt(&self, line_num: usize, id: IdSize, peer: PeerIdSize) -> Result<(usize, usize)> {
         // nothing has been added yet, so there's nothing to search for — this must be the root
         // sentinel parent of the very first character
-        if self.characters.is_empty() {
+        if (id, peer) == (0, 0) {
             return Ok((0, 0));
         }
 
@@ -475,6 +477,43 @@ pub struct SharDirectory {
     sub_files: Vec<SharFile>,
 }
 
+impl SharDirectory {
+    // finds the SharFile corresponding to a path
+    fn find_file<'a>(&'a mut self, mut path: std::path::Iter<'_>) -> Option<&'a mut SharFile> {
+        // check if there even is anything in here?
+        if self.sub_dir.is_empty() && self.sub_files.is_empty() {
+            return None;
+        }
+
+        // do we still have runway in the provided path?
+        if let Some(next) = path.next() {
+            // is the provided path a file?
+            if path.clone().next().is_none() {
+                // if yes, find the file in the file vector. Since files are the end of a path, if
+                // the file isn't found, just error
+                for file in &mut self.sub_files {
+                    if file.file_path.ends_with(next) {
+                        return Some(file);
+                    }
+                }
+
+                return None;
+            } else {
+                // if no, just loop through the directory vector trying to find the right one, then
+                // recursively call this function on it
+                for dir in &mut self.sub_dir {
+                    if dir.dir_name.ends_with(next) {
+                        return dir.find_file(path);
+                    }
+                }
+                return None;
+            }
+        } else {
+            return None;
+        }
+    }
+}
+
 impl Entry<SharDirectory> for SharDirectory {
     /// Doesn't yet support symlinks anywhere in the tree being initialized
     fn new(dir_path: PathBuf) -> Result<Self> {
@@ -494,7 +533,6 @@ impl Entry<SharDirectory> for SharDirectory {
                     if entry_type.is_dir() {
                         sub_dir_vector.push(Self::new(entry.path())?);
                     } else if entry_type.is_file() {
-                        print!("File was found \n");
                         let file = SharFile::new(entry.path())?;
 
                         sub_file_vector.push(file);
@@ -515,12 +553,43 @@ impl Entry<SharDirectory> for SharDirectory {
 
     fn add_crdt(
         &mut self,
-        _file_path: &PathBuf,
-        _line_num: usize,
-        _crdt: &CRDT,
-        _start_line: bool,
+        file_path: &PathBuf,
+        line_num: usize,
+        crdt: &CRDT,
+        start_line: bool,
     ) -> Result<()> {
-        Ok(())
+        let mut path = file_path.iter();
+        let root = self.dir_name.iter();
+
+        // use up the iterator until it gets past the root of the shar
+        for i in root {
+            let name = path.next();
+
+            match name {
+                Some(n) => {
+                    if i == n {
+                        continue;
+                    } else {
+                        return Err(Error::UnknownOrigin(String::from(
+                            "Provided path does not match up with root",
+                        )));
+                    }
+                }
+                None => {
+                    return Err(Error::UnknownOrigin(String::from(
+                        "Provided path is upstream from root",
+                    )));
+                }
+            };
+        }
+
+        // recursively search for the end of the path
+        if let Some(file) = self.find_file(path) {
+            file.add_crdt(file_path, line_num, crdt, start_line)?;
+            Ok(())
+        } else {
+            Err(Error::Generic(String::from("File not found")))
+        }
     }
 
     fn remove_crdt(

@@ -1,34 +1,40 @@
 #[cfg(test)]
 mod tree_tests {
-    use crate::shar::core::tree::{Entry, SharFile};
+    use crate::shar::core::tree::{Entry, SharDirectory, SharFile};
     use crate::shar::prelude::{CrdtRelation, CRDT};
     use std::path::PathBuf;
 
     #[test]
     fn test_add_crdt() {
-        let file_path =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test_material/scratch_add_crdt.txt");
+        // SharDirectory::add_crdt just routes to the right SharFile and delegates, so
+        // testing through the directory covers both the routing and the underlying
+        // insertion logic in one go — no need for a separate SharFile-only version
+        let dir_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("test_material/scratch_add_crdt_dir");
+        std::fs::create_dir_all(&dir_path).expect("failed to create scratch dir");
+        let file_path = dir_path.join("scratch.txt");
         std::fs::write(&file_path, "ab").expect("failed to write scratch file");
 
-        let mut file = SharFile::new(file_path.clone()).expect("failed to load file");
+        let mut dir = SharDirectory::new(dir_path.clone()).expect("failed to load directory");
 
         // add a character: append 'c' after 'b' on line 0
         let c = CRDT::new(3, 0, CrdtRelation::new('c', 2, 0));
-        file.add_crdt(&file_path, 0, &c, false)
+        dir.add_crdt(&file_path, 0, &c, false)
             .expect("failed to add character");
 
         // add a line: split right after 'c', pushing everything past it onto a new line
         let newline = CRDT::new(4, 0, CrdtRelation::new('\n', 3, 0));
-        file.add_crdt(&file_path, 0, &newline, false)
+        dir.add_crdt(&file_path, 0, &newline, false)
             .expect("failed to add line");
 
         // add another character onto the new, now-empty second line — its parent is the
         // newline itself, which is never in the projection, so this needs start_line: true
         let d = CRDT::new(5, 0, CrdtRelation::new('d', 4, 0));
-        file.add_crdt(&file_path, 1, &d, true)
+        dir.add_crdt(&file_path, 1, &d, true)
             .expect("failed to add character to new line");
 
         std::fs::remove_file(&file_path).expect("failed to delete scratch file");
+        std::fs::remove_dir(&dir_path).expect("failed to delete scratch dir");
     }
 
     #[test]

@@ -142,4 +142,42 @@ mod tree_tests {
 
         std::fs::remove_file(&file_path).expect("failed to delete scratch file");
     }
+
+    #[test]
+    fn test_remove_crdt() {
+        // same reasoning as test_add_crdt — SharDirectory::remove_crdt just routes to the
+        // right SharFile and delegates, so test through the directory to cover routing and
+        // the underlying tombstone logic together
+        let dir_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("test_material/scratch_remove_crdt_dir");
+        std::fs::create_dir_all(&dir_path).expect("failed to create scratch dir");
+        let file_path = dir_path.join("scratch.txt");
+        std::fs::write(&file_path, "ab").expect("failed to write scratch file");
+
+        let mut dir = SharDirectory::new(dir_path.clone()).expect("failed to load directory");
+
+        // remove 'b' (id 2, peer 0)
+        dir.remove_crdt(&file_path, 0, 2, 0)
+            .expect("failed to remove character");
+
+        // retrying the same removal is a no-op, not an error
+        dir.remove_crdt(&file_path, 0, 2, 0)
+            .expect("failed to no-op a repeated removal");
+
+        // removing something that was never added at all is an error
+        assert!(
+            dir.remove_crdt(&file_path, 0, 99, 0).is_err(),
+            "removing a nonexistent crdt should fail, not succeed"
+        );
+
+        // adding a character parented on the now-tombstoned 'b' exercises find_tombstone
+        // through the directory routing too — 'b's own parent ('a') is still live, so this
+        // should resolve and succeed
+        let c = CRDT::new(3, 0, CrdtRelation::new('c', 2, 0));
+        dir.add_crdt(&file_path, 0, &c, false)
+            .expect("failed to add a character parented on a tombstone");
+
+        std::fs::remove_file(&file_path).expect("failed to delete scratch file");
+        std::fs::remove_dir(&dir_path).expect("failed to delete scratch dir");
+    }
 }

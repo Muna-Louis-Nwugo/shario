@@ -594,12 +594,43 @@ impl Entry<SharDirectory> for SharDirectory {
 
     fn remove_crdt(
         &mut self,
-        _file_path: &PathBuf,
-        _line_num: usize,
-        _id: IdSize,
-        _peer: PeerIdSize,
+        file_path: &PathBuf,
+        line_num: usize,
+        id: IdSize,
+        peer: PeerIdSize,
     ) -> Result<()> {
-        Ok(())
+        let mut path = file_path.iter();
+        let root = self.dir_name.iter();
+
+        // use up the iterator until it gets past the root of the shar
+        for i in root {
+            let name = path.next();
+
+            match name {
+                Some(n) => {
+                    if i == n {
+                        continue;
+                    } else {
+                        return Err(Error::UnknownOrigin(String::from(
+                            "Provided path does not match up with root",
+                        )));
+                    }
+                }
+                None => {
+                    return Err(Error::UnknownOrigin(String::from(
+                        "Provided path is upstream from root",
+                    )));
+                }
+            };
+        }
+
+        // recursively search for the end of the path
+        if let Some(file) = self.find_file(path) {
+            file.remove_crdt(file_path, line_num, id, peer)?;
+            Ok(())
+        } else {
+            Err(Error::Generic(String::from("File not found")))
+        }
     }
 }
 

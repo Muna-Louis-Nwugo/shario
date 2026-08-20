@@ -27,21 +27,30 @@ mod tree_tests {
         let last_id = content.chars().count() as u32;
 
         // append a character after the very last character — hint line 0 on purpose, so
-        // the ring search has to walk all the way down to line 7 to find it
+        // the ring search has to walk all the way down to line 7 to find it. "FINAL_LINE_END"
+        // is 14 characters (indices 0-13), so '!' lands at index 14
         let extra = CRDT::new(last_id + 1, 0, CrdtRelation::new('!', last_id, 0));
-        dir.add_crdt(&file_path, 0, &extra, false)
+        let position = dir
+            .add_crdt(&file_path, 0, &extra, false)
             .expect("failed to append after the last character");
+        assert_eq!(position, Some((7, 14)), "'!' should land right after the last character");
 
-        // split a new line right after that character
+        // split a new line right after that character — a line-break CRDT reports the
+        // position of the character it split right after, not a position of its own
         let newline = CRDT::new(last_id + 2, 0, CrdtRelation::new('\n', last_id + 1, 0));
-        dir.add_crdt(&file_path, 0, &newline, false)
+        let position = dir
+            .add_crdt(&file_path, 0, &newline, false)
             .expect("failed to add a line at the end");
+        assert_eq!(position, Some((7, 14)), "the split should report where it split");
 
         // add the first character of the freshly-created line (line 8) — its parent is
-        // the newline, which is never in the projection, so this needs start_line: true
+        // the newline, which is never in the projection, so this needs start_line: true.
+        // The line was empty, so this hits the empty-line fast path at column 0
         let last_char = CRDT::new(last_id + 3, 0, CrdtRelation::new('X', last_id + 2, 0));
-        dir.add_crdt(&file_path, 8, &last_char, true)
+        let position = dir
+            .add_crdt(&file_path, 8, &last_char, true)
             .expect("failed to add character to the new final line");
+        assert_eq!(position, Some((8, 0)), "'X' should be the sole character on the new line");
 
         std::fs::remove_file(&file_path).expect("failed to delete scratch file");
         std::fs::remove_dir(&dir_path).expect("failed to delete scratch dir");
@@ -76,38 +85,76 @@ mod tree_tests {
         let op_y = CRDT::new(500, 2, CrdtRelation::new('Y', anchor_id, 0));
         let op_z = CRDT::new(300, 5, CrdtRelation::new('Z', anchor_id, 0));
 
-        // replica_a applies them in one order...
-        replica_a
-            .add_crdt(&path_a, 0, &op_x, false)
-            .expect("a: failed to apply x");
-        replica_a
-            .add_crdt(&path_a, 0, &op_y, false)
-            .expect("a: failed to apply y");
-        replica_a
-            .add_crdt(&path_a, 0, &op_z, false)
-            .expect("a: failed to apply z");
+        // replica_a applies them in one order... each should report a real position (an
+        // actual insert), not None (which would mean it got treated as a duplicate no-op —
+        // a sign these three ids/peers weren't as distinct as intended)
+        assert!(
+            replica_a
+                .add_crdt(&path_a, 0, &op_x, false)
+                .expect("a: failed to apply x")
+                .is_some(),
+            "a: x should be a real insert, not a no-op"
+        );
+        assert!(
+            replica_a
+                .add_crdt(&path_a, 0, &op_y, false)
+                .expect("a: failed to apply y")
+                .is_some(),
+            "a: y should be a real insert, not a no-op"
+        );
+        assert!(
+            replica_a
+                .add_crdt(&path_a, 0, &op_z, false)
+                .expect("a: failed to apply z")
+                .is_some(),
+            "a: z should be a real insert, not a no-op"
+        );
 
         // ...replica_b applies them in the reverse order...
-        replica_b
-            .add_crdt(&path_b, 0, &op_z, false)
-            .expect("b: failed to apply z");
-        replica_b
-            .add_crdt(&path_b, 0, &op_y, false)
-            .expect("b: failed to apply y");
-        replica_b
-            .add_crdt(&path_b, 0, &op_x, false)
-            .expect("b: failed to apply x");
+        assert!(
+            replica_b
+                .add_crdt(&path_b, 0, &op_z, false)
+                .expect("b: failed to apply z")
+                .is_some(),
+            "b: z should be a real insert, not a no-op"
+        );
+        assert!(
+            replica_b
+                .add_crdt(&path_b, 0, &op_y, false)
+                .expect("b: failed to apply y")
+                .is_some(),
+            "b: y should be a real insert, not a no-op"
+        );
+        assert!(
+            replica_b
+                .add_crdt(&path_b, 0, &op_x, false)
+                .expect("b: failed to apply x")
+                .is_some(),
+            "b: x should be a real insert, not a no-op"
+        );
 
         // ...and replica_c applies them in yet another order
-        replica_c
-            .add_crdt(&path_c, 0, &op_y, false)
-            .expect("c: failed to apply y");
-        replica_c
-            .add_crdt(&path_c, 0, &op_x, false)
-            .expect("c: failed to apply x");
-        replica_c
-            .add_crdt(&path_c, 0, &op_z, false)
-            .expect("c: failed to apply z");
+        assert!(
+            replica_c
+                .add_crdt(&path_c, 0, &op_y, false)
+                .expect("c: failed to apply y")
+                .is_some(),
+            "c: y should be a real insert, not a no-op"
+        );
+        assert!(
+            replica_c
+                .add_crdt(&path_c, 0, &op_x, false)
+                .expect("c: failed to apply x")
+                .is_some(),
+            "c: x should be a real insert, not a no-op"
+        );
+        assert!(
+            replica_c
+                .add_crdt(&path_c, 0, &op_z, false)
+                .expect("c: failed to apply z")
+                .is_some(),
+            "c: z should be a real insert, not a no-op"
+        );
 
         assert_eq!(
             replica_a, replica_b,
@@ -155,8 +202,10 @@ mod tree_tests {
             .get_id_peer((3, 3))
             .expect("'T' should still be there");
         let c = CRDT::new(35, 0, CrdtRelation::new('!', parent_id, parent_peer));
-        file.add_crdt(&file_path, 3, &c, false)
+        let position = file
+            .add_crdt(&file_path, 3, &c, false)
             .expect("failed to add character using looked-up parent");
+        assert_eq!(position, Some((3, 4)), "'!' should land right after 'T'");
 
         assert_eq!(
             file.get_id_peer((3, 4)),
@@ -188,20 +237,28 @@ mod tree_tests {
         // comfortably above the file's own real character count so none of them collide
         // with (and get silently no-op'd against) real content already loaded
         let a = CRDT::new(1050, 0, CrdtRelation::new('a', newline_id, 0));
-        file.add_crdt(&file_path, new_line, &a, true)
+        let position = file
+            .add_crdt(&file_path, new_line, &a, true)
             .expect("failed to add front-of-line character 'a'");
+        assert_eq!(position, Some((1, 0)), "'a' is the only thing on the line so far");
 
         let b = CRDT::new(1010, 0, CrdtRelation::new('b', newline_id, 0));
-        file.add_crdt(&file_path, new_line, &b, true)
+        let position = file
+            .add_crdt(&file_path, new_line, &b, true)
             .expect("failed to add front-of-line character 'b'");
+        assert_eq!(position, Some((1, 1)), "'b' has a smaller id, so it lands after 'a'");
 
         let c = CRDT::new(1999, 0, CrdtRelation::new('c', newline_id, 0));
-        file.add_crdt(&file_path, new_line, &c, true)
+        let position = file
+            .add_crdt(&file_path, new_line, &c, true)
             .expect("failed to add front-of-line character 'c'");
+        assert_eq!(position, Some((1, 0)), "'c' has the largest id, so it jumps to the front");
 
         let d = CRDT::new(1500, 0, CrdtRelation::new('d', newline_id, 0));
-        file.add_crdt(&file_path, new_line, &d, true)
+        let position = file
+            .add_crdt(&file_path, new_line, &d, true)
             .expect("failed to add front-of-line character 'd'");
+        assert_eq!(position, Some((1, 1)), "'d' lands right after 'c', before 'a'");
 
         // final order must be strictly descending: 1999, 1500, 1050, 1010
         assert_eq!(file.get_id_peer((new_line, 0)), Some((1999, 0)));
@@ -251,8 +308,14 @@ mod tree_tests {
         // to climb all three tombstoned levels back to the nearest live ancestor (id 9),
         // exercising find_tombstone's recursion through the full directory-routed path
         let new_char = CRDT::new(999, 0, CrdtRelation::new('!', 12, 0));
-        dir.add_crdt(&file_path, 0, &new_char, false)
+        let position = dir
+            .add_crdt(&file_path, 0, &new_char, false)
             .expect("failed to add a character parented on a 3-deep tombstone chain");
+        assert_eq!(
+            position,
+            Some((0, 9)),
+            "should land right after id 9, the nearest live ancestor left after the chain"
+        );
 
         std::fs::remove_file(&file_path).expect("failed to delete scratch file");
         std::fs::remove_dir(&dir_path).expect("failed to delete scratch dir");

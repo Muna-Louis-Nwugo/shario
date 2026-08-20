@@ -21,14 +21,16 @@ fn is_line_break(c: char) -> bool {
 pub trait Entry<T> {
     fn new(file_path: PathBuf) -> Result<T>;
 
+    /// adds a crdt
     fn add_crdt(
         &mut self,
         file_path: &PathBuf,
         line_num: usize,
         crdt: &CRDT,
         start_line: bool,
-    ) -> Result<()>;
+    ) -> Result<Option<(usize, usize)>>;
 
+    /// removes a crdt
     fn remove_crdt(
         &mut self,
         file_path: &PathBuf,
@@ -103,7 +105,7 @@ impl SharFile {
         self.projection.insert(coordinates.0 + 1, new_line);
     }
 
-    // returns the id, peer pair at a specific index
+    /// returns the id, peer pair at a specific index
     pub fn get_id_peer(&self, coordinates: (usize, usize)) -> Option<(IdSize, PeerIdSize)> {
         if coordinates.0 <= self.projection.len() - 1 {
             let val = self.projection[coordinates.0].get(coordinates.1);
@@ -118,9 +120,9 @@ impl SharFile {
         }
     }
 
-    // finds a crdt by performing a ring search starting from the parent's presumed
-    // location and stepping up to the top of the file and down to the bottom of the file to find
-    // it
+    /// finds a crdt by performing a ring search starting from the parent's presumed
+    /// location and stepping up to the top of the file and down to the bottom of the file to find
+    /// it
     fn find_crdt(&self, line_num: usize, id: IdSize, peer: PeerIdSize) -> Result<(usize, usize)> {
         // nothing has been added yet, so there's nothing to search for — this must be the root
         // sentinel parent of the very first character
@@ -192,7 +194,7 @@ impl SharFile {
         }
     }
 
-    // finds where a tombstone would have been recursively
+    /// finds where a tombstone would have been recursively
     fn find_tombstone(
         &self,
         line_num: usize,
@@ -216,6 +218,12 @@ impl SharFile {
                             relation.parent_id,
                             relation.parent_peer,
                         )?;
+                        offset = 0;
+                        range = self.projection[coordinates.0].len() + 1;
+                    }
+                    // don't start recursing if the parent is the sentinel
+                    else if (relation.parent_id, relation.parent_peer) == (0, 0) {
+                        coordinates = (0, 0);
                         offset = 0;
                         range = self.projection[coordinates.0].len() + 1;
                     } else {
@@ -310,7 +318,7 @@ impl Entry<SharFile> for SharFile {
         line_num: usize,
         crdt: &CRDT,
         start_line: bool,
-    ) -> Result<()> {
+    ) -> Result<Option<(usize, usize)>> {
         if file_path != &self.file_path {
             return Err(Error::Generic(String::from("Oops! Wrong file")));
         }
@@ -322,7 +330,7 @@ impl Entry<SharFile> for SharFile {
 
         // a retry/resend of an op we've already applied is a no-op, not a duplicate insert
         if self.characters.contains_key(&(id, peer)) {
-            return Ok(());
+            return Ok(None);
         }
 
         if !self.characters.is_empty() {
@@ -354,14 +362,14 @@ impl Entry<SharFile> for SharFile {
                 // if this is a new line, split the projection here instead of inserting a character
                 if is_line_break(relation.value) {
                     self.add_line_to_projection(coordinates);
-                    return Ok(());
+                    return Ok(Some(coordinates));
                 }
 
                 // an empty line has no siblings to compare against, so the new character is simply
                 // the only thing on it
                 if self.projection[coordinates.0].is_empty() {
                     self.projection[coordinates.0].push(insertion_value);
-                    return Ok(());
+                    return Ok(Some((coordinates.0, 0)));
                 }
 
                 let start: usize;
@@ -393,12 +401,12 @@ impl Entry<SharFile> for SharFile {
                         if next_info != (relation.parent_id, relation.parent_peer) {
                             // if the next element doesn't have the same parent, just insert this one next
                             self.projection[coordinates.0].insert(j + offset, insertion_value);
-                            break;
+                            return Ok(Some((coordinates.0, j + offset)));
                         } else if next_element.0 < id {
                             // if the next element has the same parent but a smaller id, put this one
                             // first
                             self.projection[coordinates.0].insert(j + offset, insertion_value);
-                            break;
+                            return Ok(Some((coordinates.0, j + offset)));
                         } else if next_element.0 == id {
                             // if the ids are equal, move on to the peer ids
                             //
@@ -414,17 +422,21 @@ impl Entry<SharFile> for SharFile {
                             // first and insert insert the CRDT
                             else {
                                 self.projection[coordinates.0].insert(j + offset, insertion_value);
-                                break;
+                                return Ok(Some((coordinates.0, j + offset)));
                             }
                         }
                     } else {
                         // just put to the end of the line, assuming next element doesn't exist because
                         // we're at the end
                         self.projection[coordinates.0].push((id, peer));
+                        return Ok(Some((
+                            coordinates.0,
+                            self.projection[coordinates.0].len() - 1,
+                        )));
                     }
                 }
 
-                Ok(())
+                Ok(None)
             }
 
             Err(_e) => Err(Error::OutOfBounds(String::from(
@@ -433,6 +445,7 @@ impl Entry<SharFile> for SharFile {
         }
     }
 
+    /// removes a crdt from file
     fn remove_crdt(
         &mut self,
         file_path: &PathBuf,
@@ -485,7 +498,7 @@ pub struct SharDirectory {
 }
 
 impl SharDirectory {
-    // finds the SharFile corresponding to a path
+    /// finds the SharFile corresponding to a path
     fn find_file<'a>(&'a mut self, mut path: std::path::Iter<'_>) -> Option<&'a mut SharFile> {
         // check if there even is anything in here?
         if self.sub_dir.is_empty() && self.sub_files.is_empty() {
@@ -558,13 +571,14 @@ impl Entry<SharDirectory> for SharDirectory {
         }
     }
 
+    /// adds a crdt
     fn add_crdt(
         &mut self,
         file_path: &PathBuf,
         line_num: usize,
         crdt: &CRDT,
         start_line: bool,
-    ) -> Result<()> {
+    ) -> Result<Option<(usize, usize)>> {
         let mut path = file_path.iter();
         let root = self.dir_name.iter();
 
@@ -592,13 +606,13 @@ impl Entry<SharDirectory> for SharDirectory {
 
         // recursively search for the end of the path
         if let Some(file) = self.find_file(path) {
-            file.add_crdt(file_path, line_num, crdt, start_line)?;
-            Ok(())
+            return file.add_crdt(file_path, line_num, crdt, start_line);
         } else {
             Err(Error::Generic(String::from("File not found")))
         }
     }
 
+    /// removes a crdt
     fn remove_crdt(
         &mut self,
         file_path: &PathBuf,

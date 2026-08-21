@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tree_tests {
-    use crate::shar::core::tree::{Entry, SharDirectory, SharFile};
-    use crate::shar::prelude::{CrdtRelation, CRDT};
+    use crate::shar::core::tree::{SharDirectory, SharFile};
+    use crate::shar::prelude::{CRDT, CrdtRelation};
     use std::path::PathBuf;
 
     #[test]
@@ -9,8 +9,8 @@ mod tree_tests {
         // SharDirectory::add_crdt just routes to the right SharFile and delegates, so
         // testing through the directory covers both the routing and the underlying
         // insertion logic in one go — no need for a separate SharFile-only version
-        let dir_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("test_material/scratch_add_crdt_dir");
+        let dir_path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test_material/scratch_add_crdt_dir");
         std::fs::create_dir_all(&dir_path).expect("failed to create scratch dir");
         let file_path = dir_path.join("scratch.txt");
 
@@ -20,7 +20,9 @@ mod tree_tests {
         let content = "The quick brown fox jumps?! 123 @#$%^&*()_+-=\n\u{c9}lan caf\u{e9} \u{2014} na\u{ef}ve r\u{e9}sum\u{e9}, d\u{e9}j\u{e0} vu\n\u{65e5}\u{672c}\u{8a9e}\u{306e}\u{30c6}\u{30b9}\u{30c8}\u{6587}\u{3067}\u{3059}\n\n\tTabbed\t\tline\twith\ttabs\n...   lots   of    spaces   ...\nemoji test \u{1f389}\u{1f680} done\nFINAL_LINE_END";
         std::fs::write(&file_path, content).expect("failed to write scratch file");
 
-        let mut dir = SharDirectory::new(dir_path.clone()).expect("failed to load directory");
+        let mut counter = 0;
+        let mut dir =
+            SharDirectory::new(dir_path.clone(), &mut counter).expect("failed to load directory");
 
         // add_file assigns ids 1..=n in char order, so the very last character loaded has
         // id == total char count, sitting on the last (8th, index 7) line
@@ -33,7 +35,11 @@ mod tree_tests {
         let position = dir
             .add_crdt(&file_path, 0, &extra, false)
             .expect("failed to append after the last character");
-        assert_eq!(position, Some((7, 14)), "'!' should land right after the last character");
+        assert_eq!(
+            position,
+            Some((7, 14)),
+            "'!' should land right after the last character"
+        );
 
         // split a new line right after that character — a line-break CRDT reports the
         // position of the character it split right after, not a position of its own
@@ -41,7 +47,11 @@ mod tree_tests {
         let position = dir
             .add_crdt(&file_path, 0, &newline, false)
             .expect("failed to add a line at the end");
-        assert_eq!(position, Some((7, 14)), "the split should report where it split");
+        assert_eq!(
+            position,
+            Some((7, 14)),
+            "the split should report where it split"
+        );
 
         // add the first character of the freshly-created line (line 8) — its parent is
         // the newline, which is never in the projection, so this needs start_line: true.
@@ -50,7 +60,11 @@ mod tree_tests {
         let position = dir
             .add_crdt(&file_path, 8, &last_char, true)
             .expect("failed to add character to the new final line");
-        assert_eq!(position, Some((8, 0)), "'X' should be the sole character on the new line");
+        assert_eq!(
+            position,
+            Some((8, 0)),
+            "'X' should be the sole character on the new line"
+        );
 
         std::fs::remove_file(&file_path).expect("failed to delete scratch file");
         std::fs::remove_dir(&dir_path).expect("failed to delete scratch dir");
@@ -72,9 +86,15 @@ mod tree_tests {
         std::fs::write(&path_b, content).expect("failed to write scratch file b");
         std::fs::write(&path_c, content).expect("failed to write scratch file c");
 
-        let mut replica_a = SharFile::new(path_a.clone()).expect("failed to load replica a");
-        let mut replica_b = SharFile::new(path_b.clone()).expect("failed to load replica b");
-        let mut replica_c = SharFile::new(path_c.clone()).expect("failed to load replica c");
+        let mut counter_a = 0;
+        let mut counter_b = 0;
+        let mut counter_c = 0;
+        let mut replica_a =
+            SharFile::new(path_a.clone(), &mut counter_a).expect("failed to load replica a");
+        let mut replica_b =
+            SharFile::new(path_b.clone(), &mut counter_b).expect("failed to load replica b");
+        let mut replica_c =
+            SharFile::new(path_c.clone(), &mut counter_c).expect("failed to load replica c");
 
         // the very last real character in the file — three peers concurrently insert
         // after it without seeing each other's ops. Chosen to exercise more than one
@@ -172,35 +192,75 @@ mod tree_tests {
 
     #[test]
     fn test_get_id_peer() {
-        let file_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("test_material/scratch_get_id_peer.txt");
+        let file_path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test_material/scratch_get_id_peer.txt");
         // four lines of 9 characters each (except the last), no trailing newline
         let content = "abc123!@#\ndef456$%^\nghi789&*(\nLAST";
         std::fs::write(&file_path, content).expect("failed to write scratch file");
 
-        let mut file = SharFile::new(file_path.clone()).expect("failed to load file");
+        let mut counter = 0;
+        let mut file =
+            SharFile::new(file_path.clone(), &mut counter).expect("failed to load file");
 
         // spot-check known positions across every line, not just the first
-        assert_eq!(file.get_id_peer((0, 0)), Some((1, 0)), "'a' should be at (0, 0)");
-        assert_eq!(file.get_id_peer((0, 8)), Some((9, 0)), "'#' should be at (0, 8)");
-        assert_eq!(file.get_id_peer((1, 0)), Some((11, 0)), "'d' should be at (1, 0)");
-        assert_eq!(file.get_id_peer((1, 8)), Some((19, 0)), "'^' should be at (1, 8)");
-        assert_eq!(file.get_id_peer((2, 0)), Some((21, 0)), "'g' should be at (2, 0)");
-        assert_eq!(file.get_id_peer((2, 8)), Some((29, 0)), "'(' should be at (2, 8)");
-        assert_eq!(file.get_id_peer((3, 0)), Some((31, 0)), "'L' should be at (3, 0)");
-        assert_eq!(file.get_id_peer((3, 3)), Some((34, 0)), "'T' should be at (3, 3)");
+        assert_eq!(
+            file.get_id_peer((0, 0)),
+            Some((1, 0)),
+            "'a' should be at (0, 0)"
+        );
+        assert_eq!(
+            file.get_id_peer((0, 8)),
+            Some((9, 0)),
+            "'#' should be at (0, 8)"
+        );
+        assert_eq!(
+            file.get_id_peer((1, 0)),
+            Some((11, 0)),
+            "'d' should be at (1, 0)"
+        );
+        assert_eq!(
+            file.get_id_peer((1, 8)),
+            Some((19, 0)),
+            "'^' should be at (1, 8)"
+        );
+        assert_eq!(
+            file.get_id_peer((2, 0)),
+            Some((21, 0)),
+            "'g' should be at (2, 0)"
+        );
+        assert_eq!(
+            file.get_id_peer((2, 8)),
+            Some((29, 0)),
+            "'(' should be at (2, 8)"
+        );
+        assert_eq!(
+            file.get_id_peer((3, 0)),
+            Some((31, 0)),
+            "'L' should be at (3, 0)"
+        );
+        assert_eq!(
+            file.get_id_peer((3, 3)),
+            Some((34, 0)),
+            "'T' should be at (3, 3)"
+        );
 
         // out of bounds in either dimension is None, not a panic
-        assert_eq!(file.get_id_peer((0, 9)), None, "line 0 only has 9 characters");
-        assert_eq!(file.get_id_peer((3, 4)), None, "line 3 only has 4 characters");
+        assert_eq!(
+            file.get_id_peer((0, 9)),
+            None,
+            "line 0 only has 9 characters"
+        );
+        assert_eq!(
+            file.get_id_peer((3, 4)),
+            None,
+            "line 3 only has 4 characters"
+        );
         assert_eq!(file.get_id_peer((10, 0)), None, "there are only 4 lines");
 
         // the id/peer this returns has to be usable as a real parent reference: look up
         // the last character of the last line, use it as a parent, and confirm the new
         // character lands right after it
-        let (parent_id, parent_peer) = file
-            .get_id_peer((3, 3))
-            .expect("'T' should still be there");
+        let (parent_id, parent_peer) = file.get_id_peer((3, 3)).expect("'T' should still be there");
         let c = CRDT::new(35, 0, CrdtRelation::new('!', parent_id, parent_peer));
         let position = file
             .add_crdt(&file_path, 3, &c, false)
@@ -225,7 +285,9 @@ mod tree_tests {
         let content = "some prefix line !@# \u{1f600} 123\n";
         std::fs::write(&file_path, content).expect("failed to write scratch file");
 
-        let mut file = SharFile::new(file_path.clone()).expect("failed to load file");
+        let mut counter = 0;
+        let mut file =
+            SharFile::new(file_path.clone(), &mut counter).expect("failed to load file");
 
         let newline_id = content.chars().count() as u32;
         let new_line = 1;
@@ -240,25 +302,41 @@ mod tree_tests {
         let position = file
             .add_crdt(&file_path, new_line, &a, true)
             .expect("failed to add front-of-line character 'a'");
-        assert_eq!(position, Some((1, 0)), "'a' is the only thing on the line so far");
+        assert_eq!(
+            position,
+            Some((1, 0)),
+            "'a' is the only thing on the line so far"
+        );
 
         let b = CRDT::new(1010, 0, CrdtRelation::new('b', newline_id, 0));
         let position = file
             .add_crdt(&file_path, new_line, &b, true)
             .expect("failed to add front-of-line character 'b'");
-        assert_eq!(position, Some((1, 1)), "'b' has a smaller id, so it lands after 'a'");
+        assert_eq!(
+            position,
+            Some((1, 1)),
+            "'b' has a smaller id, so it lands after 'a'"
+        );
 
         let c = CRDT::new(1999, 0, CrdtRelation::new('c', newline_id, 0));
         let position = file
             .add_crdt(&file_path, new_line, &c, true)
             .expect("failed to add front-of-line character 'c'");
-        assert_eq!(position, Some((1, 0)), "'c' has the largest id, so it jumps to the front");
+        assert_eq!(
+            position,
+            Some((1, 0)),
+            "'c' has the largest id, so it jumps to the front"
+        );
 
         let d = CRDT::new(1500, 0, CrdtRelation::new('d', newline_id, 0));
         let position = file
             .add_crdt(&file_path, new_line, &d, true)
             .expect("failed to add front-of-line character 'd'");
-        assert_eq!(position, Some((1, 1)), "'d' lands right after 'c', before 'a'");
+        assert_eq!(
+            position,
+            Some((1, 1)),
+            "'d' lands right after 'c', before 'a'"
+        );
 
         // final order must be strictly descending: 1999, 1500, 1050, 1010
         assert_eq!(file.get_id_peer((new_line, 0)), Some((1999, 0)));
@@ -274,15 +352,17 @@ mod tree_tests {
         // same reasoning as test_add_crdt — SharDirectory::remove_crdt just routes to the
         // right SharFile and delegates, so test through the directory to cover routing and
         // the underlying tombstone logic together
-        let dir_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("test_material/scratch_remove_crdt_dir");
+        let dir_path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test_material/scratch_remove_crdt_dir");
         std::fs::create_dir_all(&dir_path).expect("failed to create scratch dir");
         let file_path = dir_path.join("scratch.txt");
         let content =
             "chain: a-b-c-d-e-f end of chain, more filler text here 12345 \u{2603}\u{2764}\u{fe0f}";
         std::fs::write(&file_path, content).expect("failed to write scratch file");
 
-        let mut dir = SharDirectory::new(dir_path.clone()).expect("failed to load directory");
+        let mut counter = 0;
+        let mut dir =
+            SharDirectory::new(dir_path.clone(), &mut counter).expect("failed to load directory");
 
         // ids 10, 11, 12 are three real, consecutive characters (each one's parent is
         // the one before it, per add_file's sequential chain) — tombstone all three to

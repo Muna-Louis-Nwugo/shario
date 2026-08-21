@@ -26,6 +26,3 @@ pub type OperationType = types::OperationType;
 pub type IdSize = u32;
 
 pub type PeerIdSize = u8;
-
-/// The value of a single node: one Unicode scalar value.
-pub type Value = char;

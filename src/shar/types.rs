@@ -1,13 +1,10 @@
 //! Shar types for crdts and operations
 
-use crate::prelude::*;
-
 // GLOBAL VARIABLES
 /// Types of operations that can be made
 pub enum OperationType {
     AddChar,
     RemoveChar,
-    ChangeChar,
 }
 
 impl OperationType {
@@ -20,7 +17,6 @@ impl OperationType {
         match self {
             OperationType::AddChar => [0u8, 1u8],
             OperationType::RemoveChar => [1u8, 0u8],
-            OperationType::ChangeChar => [1u8, 1u8],
         }
     }
 }

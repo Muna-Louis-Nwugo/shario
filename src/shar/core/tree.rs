@@ -17,51 +17,51 @@ fn is_line_break(c: char) -> bool {
     )
 }
 
-// Behaviours for structs representing file system or directory names
-pub trait Entry<T> {
-    fn new(file_path: PathBuf) -> Result<T>;
-
-    /// adds a crdt
-    fn add_crdt(
-        &mut self,
-        file_path: &PathBuf,
-        line_num: usize,
-        crdt: &CRDT,
-        start_line: bool,
-    ) -> Result<Option<(usize, usize)>>;
-
-    /// removes a crdt
-    fn remove_crdt(
-        &mut self,
-        file_path: &PathBuf,
-        line_num: usize,
-        id: IdSize,
-        peer: PeerIdSize,
-    ) -> Result<()>;
-}
-
 /// Represents a file in the shar
 #[derive(Debug, Clone)]
 pub struct SharFile {
     file_path: PathBuf,
     characters: HashMap<(IdSize, PeerIdSize), CrdtRelation>,
     projection: Vec<Vec<(IdSize, u8)>>,
-    char_counter: u32,
 }
 
 // file_path is local placement, not CRDT state, so it's excluded — two replicas of the same
 // logical file naturally live at different paths, but should compare equal once they converge
 impl PartialEq for SharFile {
     fn eq(&self, other: &Self) -> bool {
-        self.characters == other.characters
-            && self.projection == other.projection
-            && self.char_counter == other.char_counter
+        self.characters == other.characters && self.projection == other.projection
     }
 }
 
 impl SharFile {
+    // TODO: Tree traversal to reconstruct file
+    pub fn new(file_path: PathBuf, counter: &mut u32) -> Result<Self> {
+        let file = std::fs::read_to_string(&file_path);
+
+        match file {
+            Ok(file) => {
+                let mut shar_file = SharFile {
+                    file_path: file_path,
+                    characters: HashMap::new(),
+                    projection: Vec::new(),
+                };
+
+                // it's okay to ignore the Error that could occur here because we're performing the
+                // same check fo end up in this Ok()
+                shar_file.add_file(file, counter);
+
+                Ok(shar_file)
+            }
+
+            Err(e) => Err(Error::ReadFail(
+                format!("Something went wrong while trying to read file contents: \n {e} \n")
+                    .to_string(),
+            )),
+        }
+    }
+
     /// Adds all the contents of a file to the tree.
-    fn add_file(&mut self, file_contents: String) {
+    fn add_file(&mut self, file_contents: String, counter: &mut u32) {
         // the shar specification states that peer 0 is reserved for the char itself to add to the
         // tree as necessary
         self.projection.push(Vec::new());
@@ -74,8 +74,8 @@ impl SharFile {
         let mut prev: char = char::from(0);
 
         for (_i, c) in file_contents.char_indices() {
-            self.char_counter += 1;
-            let id = self.char_counter;
+            *counter += 1;
+            let id = counter.clone();
 
             let crdt = CRDT::new(id, 0, CrdtRelation::new(c, id - 1, 0));
 
@@ -282,37 +282,9 @@ impl SharFile {
             None => return Err(Error::Generic(String::from("tombstone not found"))),
         }
     }
-}
-impl Entry<SharFile> for SharFile {
-    // TODO: Tree traversal to reconstruct file
-    fn new(file_path: PathBuf) -> Result<Self> {
-        let file = std::fs::read_to_string(&file_path);
-
-        match file {
-            Ok(file) => {
-                let mut shar_file = SharFile {
-                    file_path: file_path,
-                    characters: HashMap::new(),
-                    projection: Vec::new(),
-                    char_counter: 0,
-                };
-
-                // it's okay to ignore the Error that could occur here because we're performing the
-                // same check fo end up in this Ok()
-                shar_file.add_file(file);
-
-                Ok(shar_file)
-            }
-
-            Err(e) => Err(Error::ReadFail(
-                format!("Something went wrong while trying to read file contents: \n {e} \n")
-                    .to_string(),
-            )),
-        }
-    }
 
     /// Adds a CRDT to the tree.
-    fn add_crdt(
+    pub fn add_crdt(
         &mut self,
         file_path: &PathBuf,
         line_num: usize,
@@ -446,7 +418,7 @@ impl Entry<SharFile> for SharFile {
     }
 
     /// removes a crdt from file
-    fn remove_crdt(
+    pub fn remove_crdt(
         &mut self,
         file_path: &PathBuf,
         line_num: usize,
@@ -498,6 +470,91 @@ pub struct SharDirectory {
 }
 
 impl SharDirectory {
+    /// Doesn't yet support symlinks anywhere in the tree being initialized
+    pub fn new(dir_path: PathBuf, counter: &mut u32) -> Result<Self> {
+        let entries = std::fs::read_dir(&dir_path);
+        let mut sub_dir_vector = Vec::new();
+        let mut sub_file_vector = Vec::new();
+
+        match entries {
+            Ok(entries) => {
+                // Recursively call new() on children. If the current entry is a file, create the
+                // file's CRDT tree
+
+                for entry in entries {
+                    let entry = entry?;
+                    let entry_type = entry.file_type()?;
+                    // if it's a directory, recursively create a new SharDir
+                    if entry_type.is_dir() {
+                        sub_dir_vector.push(Self::new(entry.path(), counter)?);
+                    } else if entry_type.is_file() {
+                        let file = SharFile::new(entry.path(), counter)?;
+
+                        sub_file_vector.push(file);
+                    }
+                }
+                Ok(SharDirectory {
+                    dir_name: dir_path,
+                    sub_dir: sub_dir_vector,
+                    sub_files: sub_file_vector,
+                })
+            }
+
+            Err(e) => Err(Error::ReadFail(
+                format!("Failed to read directory, try again: \n {e} \n").to_string(),
+            )),
+        }
+    }
+
+    /// adds a crdt
+    pub fn add_crdt(
+        &mut self,
+        file_path: &PathBuf,
+        line_num: usize,
+        crdt: &CRDT,
+        start_line: bool,
+    ) -> Result<Option<(usize, usize)>> {
+        let path = file_path.iter();
+
+        // recursively search for the end of the path
+        if let Some(file) = self.find_file(path) {
+            return file.add_crdt(file_path, line_num, crdt, start_line);
+        } else {
+            Err(Error::Generic(String::from("File not found")))
+        }
+    }
+
+    /// removes a crdt
+    pub fn remove_crdt(
+        &mut self,
+        file_path: &PathBuf,
+        line_num: usize,
+        id: IdSize,
+        peer: PeerIdSize,
+    ) -> Result<()> {
+        let path = file_path.iter();
+
+        // recursively search for the end of the path
+        if let Some(file) = self.find_file(path) {
+            file.remove_crdt(file_path, line_num, id, peer)?;
+            Ok(())
+        } else {
+            Err(Error::Generic(String::from("File not found")))
+        }
+    }
+
+    /// finds the (id, peer) pair for an element at a given location
+    pub fn get_id_peer(&mut self, file_path: &PathBuf, pos: (usize, usize)) -> Result<()> {
+        let path = file_path.iter();
+
+        if let Some(file) = self.find_file(path) {
+            file.get_id_peer(pos);
+            Ok(())
+        } else {
+            Err(Error::Generic(String::from("File not found")))
+        }
+    }
+
     /// finds the SharFile corresponding to a path
     fn find_file<'a>(&'a mut self, mut path: std::path::Iter<'_>) -> Option<&'a mut SharFile> {
         // check if there even is anything in here?
@@ -505,9 +562,29 @@ impl SharDirectory {
             return None;
         }
 
+        let root = self.dir_name.iter();
+
+        // use up the iterator until it gets past the root of the shar
+        for i in root {
+            let name = path.next();
+
+            match name {
+                Some(n) => {
+                    if i == n {
+                        continue;
+                    } else {
+                        return None;
+                    }
+                }
+                None => {
+                    return None;
+                }
+            };
+        }
+
         // do we still have runway in the provided path?
         if let Some(next) = path.next() {
-            // is the provided path a file?
+            // is the provided path the file?
             if path.clone().next().is_none() {
                 // if yes, find the file in the file vector. Since files are the end of a path, if
                 // the file isn't found, just error
@@ -530,127 +607,6 @@ impl SharDirectory {
             }
         } else {
             return None;
-        }
-    }
-}
-
-impl Entry<SharDirectory> for SharDirectory {
-    /// Doesn't yet support symlinks anywhere in the tree being initialized
-    fn new(dir_path: PathBuf) -> Result<Self> {
-        let entries = std::fs::read_dir(&dir_path);
-        let mut sub_dir_vector = Vec::new();
-        let mut sub_file_vector = Vec::new();
-
-        match entries {
-            Ok(entries) => {
-                // Recursively call new() on children. If the current entry is a file, create the
-                // file's CRDT tree
-
-                for entry in entries {
-                    let entry = entry?;
-                    let entry_type = entry.file_type()?;
-                    // if it's a directory, recursively create a new SharDir
-                    if entry_type.is_dir() {
-                        sub_dir_vector.push(Self::new(entry.path())?);
-                    } else if entry_type.is_file() {
-                        let file = SharFile::new(entry.path())?;
-
-                        sub_file_vector.push(file);
-                    }
-                }
-                Ok(SharDirectory {
-                    dir_name: dir_path,
-                    sub_dir: sub_dir_vector,
-                    sub_files: sub_file_vector,
-                })
-            }
-
-            Err(e) => Err(Error::ReadFail(
-                format!("Failed to read directory, try again: \n {e} \n").to_string(),
-            )),
-        }
-    }
-
-    /// adds a crdt
-    fn add_crdt(
-        &mut self,
-        file_path: &PathBuf,
-        line_num: usize,
-        crdt: &CRDT,
-        start_line: bool,
-    ) -> Result<Option<(usize, usize)>> {
-        let mut path = file_path.iter();
-        let root = self.dir_name.iter();
-
-        // use up the iterator until it gets past the root of the shar
-        for i in root {
-            let name = path.next();
-
-            match name {
-                Some(n) => {
-                    if i == n {
-                        continue;
-                    } else {
-                        return Err(Error::UnknownOrigin(String::from(
-                            "Provided path does not match up with root",
-                        )));
-                    }
-                }
-                None => {
-                    return Err(Error::UnknownOrigin(String::from(
-                        "Provided path is upstream from root",
-                    )));
-                }
-            };
-        }
-
-        // recursively search for the end of the path
-        if let Some(file) = self.find_file(path) {
-            return file.add_crdt(file_path, line_num, crdt, start_line);
-        } else {
-            Err(Error::Generic(String::from("File not found")))
-        }
-    }
-
-    /// removes a crdt
-    fn remove_crdt(
-        &mut self,
-        file_path: &PathBuf,
-        line_num: usize,
-        id: IdSize,
-        peer: PeerIdSize,
-    ) -> Result<()> {
-        let mut path = file_path.iter();
-        let root = self.dir_name.iter();
-
-        // use up the iterator until it gets past the root of the shar
-        for i in root {
-            let name = path.next();
-
-            match name {
-                Some(n) => {
-                    if i == n {
-                        continue;
-                    } else {
-                        return Err(Error::UnknownOrigin(String::from(
-                            "Provided path does not match up with root",
-                        )));
-                    }
-                }
-                None => {
-                    return Err(Error::UnknownOrigin(String::from(
-                        "Provided path is upstream from root",
-                    )));
-                }
-            };
-        }
-
-        // recursively search for the end of the path
-        if let Some(file) = self.find_file(path) {
-            file.remove_crdt(file_path, line_num, id, peer)?;
-            Ok(())
-        } else {
-            Err(Error::Generic(String::from("File not found")))
         }
     }
 }

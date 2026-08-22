@@ -2,6 +2,7 @@
 
 // GLOBAL VARIABLES
 /// Types of operations that can be made
+#[derive(Clone)]
 pub enum OperationType {
     AddChar,
     RemoveChar,
@@ -61,6 +62,7 @@ impl CRDT {
 ///crdt: [CRDT] -> A CRDT
 ///operation_type: [OperationType] -> The type of operation being performed
 ///peer: u32 -> The user_id that created the operation
+#[derive(Clone)]
 pub struct Operation {
     crdt: CRDT,
     operation_type: OperationType,

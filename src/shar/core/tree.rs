@@ -22,7 +22,8 @@ fn is_line_break(c: char) -> bool {
 pub struct SharFile {
     file_path: PathBuf,
     characters: HashMap<(IdSize, PeerIdSize), CrdtRelation>,
-    projection: Vec<Vec<(IdSize, u8)>>,
+    projection: Vec<Vec<(IdSize, PeerIdSize)>>,
+    line_start_ids: Vec<(IdSize, PeerIdSize)>,
 }
 
 // file_path is local placement, not CRDT state, so it's excluded — two replicas of the same
@@ -44,6 +45,7 @@ impl SharFile {
                     file_path: file_path,
                     characters: HashMap::new(),
                     projection: Vec::new(),
+                    line_start_ids: Vec::new(),
                 };
 
                 // it's okay to ignore the Error that could occur here because we're performing the
@@ -82,7 +84,7 @@ impl SharFile {
             start_of_line = is_line_break(prev);
 
             // safe to ignore: file_path always matches self's own path during initial load
-            let _ = self.add_crdt(&file_path, line, &crdt, start_of_line);
+            let _ = self.add_crdt(&file_path, line, crdt, start_of_line);
 
             if is_line_break(c) {
                 line += 1;
@@ -117,6 +119,18 @@ impl SharFile {
             }
         } else {
             None
+        }
+    }
+
+    pub fn get_line_id_peer(&self, line_number: usize) -> Option<(IdSize, PeerIdSize)> {
+        let id_peer = self.line_start_ids.get(line_number);
+
+        match id_peer {
+            Some(id_peer) => {
+                return Some(id_peer.clone());
+            }
+
+            None => None,
         }
     }
 
@@ -288,7 +302,7 @@ impl SharFile {
         &mut self,
         file_path: &PathBuf,
         line_num: usize,
-        crdt: &CRDT,
+        crdt: CRDT,
         start_line: bool,
     ) -> Result<Option<(usize, usize)>> {
         if file_path != &self.file_path {
@@ -315,6 +329,13 @@ impl SharFile {
         // parent may be a newline, which is deliberately never stored in the projection) — the
         // line itself is already known, so there's nothing to search for
         let parent = if start_line {
+            if !self
+                .line_start_ids
+                .contains(&(relation.parent_id, relation.parent_peer))
+            {
+                self.line_start_ids
+                    .push((relation.parent_id, relation.parent_peer));
+            }
             Ok((line_num, 0))
         } else {
             if parent_exists {
@@ -511,7 +532,7 @@ impl SharDirectory {
         &mut self,
         file_path: &PathBuf,
         line_num: usize,
-        crdt: &CRDT,
+        crdt: CRDT,
         start_line: bool,
     ) -> Result<Option<(usize, usize)>> {
         let path = file_path.iter();
@@ -544,12 +565,30 @@ impl SharDirectory {
     }
 
     /// finds the (id, peer) pair for an element at a given location
-    pub fn get_id_peer(&mut self, file_path: &PathBuf, pos: (usize, usize)) -> Result<()> {
+    pub fn get_id_peer(
+        &mut self,
+        file_path: &PathBuf,
+        pos: (usize, usize),
+    ) -> Result<Option<(IdSize, PeerIdSize)>> {
         let path = file_path.iter();
 
         if let Some(file) = self.find_file(path) {
-            file.get_id_peer(pos);
-            Ok(())
+            return Ok(file.get_id_peer(pos));
+        } else {
+            Err(Error::Generic(String::from("File not found")))
+        }
+    }
+
+    /// finds the (id, peer) pair for a line
+    pub fn get_line_id_peer(
+        &mut self,
+        file_path: &PathBuf,
+        line_num: usize,
+    ) -> Result<Option<(IdSize, PeerIdSize)>> {
+        let path = file_path.iter();
+
+        if let Some(file) = self.find_file(path) {
+            return Ok(file.get_line_id_peer(line_num));
         } else {
             Err(Error::Generic(String::from("File not found")))
         }

@@ -69,6 +69,7 @@ impl SharFile {
         self.projection.push(Vec::new());
         self.characters
             .insert((0, 0), CrdtRelation::new(char::from(0), 0, 0));
+        self.line_start_ids.push((0, 0));
 
         let file_path = self.file_path.clone();
         let mut line = 0;
@@ -334,7 +335,7 @@ impl SharFile {
                 .contains(&(relation.parent_id, relation.parent_peer))
             {
                 self.line_start_ids
-                    .push((relation.parent_id, relation.parent_peer));
+                    .insert(line_num, (relation.parent_id, relation.parent_peer));
             }
             Ok((line_num, 0))
         } else {

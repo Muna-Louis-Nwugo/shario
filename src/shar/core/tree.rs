@@ -464,6 +464,23 @@ impl SharFile {
             None => return Err(Error::Generic(String::from("crdt cannot be found"))),
         }
 
+        // check if this is one of the line
+        if let Some(line) = self.line_start_ids.iter().position(|&x| x == (id, peer)) {
+            self.line_start_ids.remove(line);
+
+            // fix the projection
+            let mut to_be_deleted = self.projection[line].clone();
+
+            // append deleted line to line above it
+            // REMEMBER at the IDE level, you are unable to remove the sentinel character, so
+            // this won't break in that case since that case never arrives
+            self.projection[line - 1].append(&mut to_be_deleted);
+
+            // delete the line
+            self.projection.remove(line);
+            return Ok(());
+        }
+
         // find the value in the projection and delete it
         let position = self.find_crdt(line_num, id, peer);
 

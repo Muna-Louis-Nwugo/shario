@@ -64,8 +64,8 @@ impl CRDT {
 ///peer: u32 -> The user_id that created the operation
 #[derive(Clone)]
 pub struct Operation {
-    crdt: CRDT,
-    operation_type: OperationType,
+    pub crdt: CRDT,
+    pub operation_type: OperationType,
 }
 
 impl Operation {

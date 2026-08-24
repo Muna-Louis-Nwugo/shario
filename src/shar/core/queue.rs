@@ -1,7 +1,6 @@
 use crate::shar::prelude::*;
 use crate::shar::types::CrdtRelation;
 use crate::shar::{core::tree::SharDirectory, types::Operation};
-use std::collections::VecDeque;
 use std::path::PathBuf;
 /* The Shar operation queue */
 
@@ -31,10 +30,9 @@ impl SharQueue {
         Ok(queue)
     }
 
-    pub fn add_ide_operation(
+    pub fn add_ide_crdt(
         &mut self,
         file_path: &PathBuf,
-        op_type: OperationType,
         parent_row: usize,
         parent_col: usize,
         val: char,
@@ -55,7 +53,7 @@ impl SharQueue {
                     self.counter += 1;
                     let relation = CrdtRelation::new(val, parent_real.0, parent_real.1);
                     let crdt = CRDT::new(self.counter, self.peer, relation);
-                    let op = Operation::new(crdt.clone(), op_type);
+                    let op = Operation::new(crdt.clone(), OperationType::AddChar);
 
                     let _ = self.tree.add_crdt(file_path, parent_row, crdt, start_line);
                     Ok(op)
@@ -64,6 +62,41 @@ impl SharQueue {
                 }
             }
             Err(e) => Err(Error::Generic(format!("Something went wrong: {e}"))),
+        }
+    }
+
+    pub fn remove_ide_crdt(
+        &mut self,
+        file_path: &PathBuf,
+        row: usize,
+        col: usize,
+        is_line: bool,
+    ) -> Result<()> {
+        // find the id/peer of the crdt
+        let id_peer;
+
+        if is_line {
+            id_peer = self.tree.get_line_id_peer(file_path, row)?;
+        } else {
+            id_peer = self.tree.get_id_peer(file_path, (row, col))?;
+        }
+
+        match id_peer {
+            // assume if None, the crdt has either already been removed or doesn't exist yet to be
+            // remved
+            // TODO: Once network is up and running, gotta figure out a way to wait to apply
+            // changes when the parent / state for those changes don't exist yet
+            Some(id_peer) => {
+                // make sure the sentinel never gets through.
+                if id_peer == (0, 0) {
+                    return Ok(());
+                }
+
+                let _ = self.tree.remove_crdt(file_path, row, id_peer.0, id_peer.1);
+                Ok(())
+            }
+
+            None => Ok(()),
         }
     }
 }

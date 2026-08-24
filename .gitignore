@@ -25,4 +25,7 @@ target
 
 /target
 
+# scratch fixtures created/removed by tests
+/test_material/
+
 

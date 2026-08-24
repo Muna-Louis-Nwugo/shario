@@ -10,7 +10,7 @@ mod tree_tests {
         // testing through the directory covers both the routing and the underlying
         // insertion logic in one go — no need for a separate SharFile-only version
         let dir_path =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test_material/scratch_add_crdt_dir");
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scratch_add_crdt_dir");
         std::fs::create_dir_all(&dir_path).expect("failed to create scratch dir");
         let file_path = dir_path.join("scratch.txt");
 
@@ -73,11 +73,11 @@ mod tree_tests {
     #[test]
     fn test_convergence() {
         let path_a = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("test_material/scratch_convergence_a.txt");
+            .join("scratch_convergence_a.txt");
         let path_b = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("test_material/scratch_convergence_b.txt");
+            .join("scratch_convergence_b.txt");
         let path_c = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("test_material/scratch_convergence_c.txt");
+            .join("scratch_convergence_c.txt");
 
         // same messy multi-line/mixed-script content, loaded independently into three
         // separate replicas
@@ -193,7 +193,7 @@ mod tree_tests {
     #[test]
     fn test_get_id_peer() {
         let file_path =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test_material/scratch_get_id_peer.txt");
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scratch_get_id_peer.txt");
         // four lines of 9 characters each (except the last), no trailing newline
         let content = "abc123!@#\ndef456$%^\nghi789&*(\nLAST";
         std::fs::write(&file_path, content).expect("failed to write scratch file");
@@ -279,7 +279,7 @@ mod tree_tests {
     #[test]
     fn test_front_of_line_insert_ordering() {
         let file_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("test_material/scratch_front_of_line.txt");
+            .join("scratch_front_of_line.txt");
         // messy first line ending in a real newline (id == char count), whose child
         // line (line 1) starts out empty
         let content = "some prefix line !@# \u{1f600} 123\n";
@@ -353,7 +353,7 @@ mod tree_tests {
         // right SharFile and delegates, so test through the directory to cover routing and
         // the underlying tombstone logic together
         let dir_path =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test_material/scratch_remove_crdt_dir");
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scratch_remove_crdt_dir");
         std::fs::create_dir_all(&dir_path).expect("failed to create scratch dir");
         let file_path = dir_path.join("scratch.txt");
         let content =

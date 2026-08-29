@@ -10,14 +10,16 @@ pub struct SharQueue {
     peer: PeerIdSize,
     tree: SharDirectory,
     counter: u32,
-    callback: fn(usize, usize, char),
+    add_callback: fn(usize, usize),
+    remove_callback: fn(usize, usize, bool),
 }
 
 impl SharQueue {
     pub fn new(
         dir_path: PathBuf,
         this_peer_id: PeerIdSize,
-        callback: fn(usize, usize, char),
+        add_callback: fn(usize, usize),
+        remove_callback: fn(usize, usize, bool),
     ) -> Result<Self> {
         let mut counter: u32 = 0;
         let tree = SharDirectory::new(dir_path, &mut counter)?;
@@ -28,7 +30,8 @@ impl SharQueue {
             peer: this_peer_id,
             counter: counter,
             tree: tree,
-            callback: callback,
+            add_callback: add_callback,
+            remove_callback: remove_callback,
         };
 
         Ok(queue)
@@ -100,7 +103,6 @@ impl SharQueue {
                     id_peer.0,
                     id_peer.1,
                     row,
-                    is_whole_line,
                 ))
             }
 
@@ -118,7 +120,7 @@ impl SharQueue {
         }
     }
 
-    pub fn add_network_operation(&mut self, op: AddOperation, callback: fn(usize, usize)) {
+    pub fn add_network_operation(&mut self, op: AddOperation) {
         let crdt = op.crdt;
         let row = op.row;
         let file_path = op.file_path.clone();
@@ -130,7 +132,7 @@ impl SharQueue {
         match pos {
             Ok(pos) => {
                 if let Some(position) = pos {
-                    callback(position.0, position.1);
+                    (self.add_callback)(position.0, position.1);
 
                     // traverse the add_backlog to see if we have any inserts depending on this
                     let mut i = 0;
@@ -144,15 +146,28 @@ impl SharQueue {
                             == (item_crdt.relation.parent_id, item_crdt.relation.parent_peer)
                         {
                             self.add_backlog.remove(i);
-                            self.add_network_operation(item, callback);
+                            self.add_network_operation(item);
                         } else {
                             i += 1;
                         }
                     }
 
                     // traverse the remove_backlog to see if we have any removes depending on this:
-                    for _i in 0..self.remove_backlog.len() {
-                        // DO REMOVE
+
+                    let mut j = 0;
+                    let mut removed = false;
+                    while j < self.remove_backlog.len() {
+                        let item = self.remove_backlog[j].clone();
+
+                        if (item.id, item.peer) == (crdt.id, crdt.peer) {
+                            if !removed {
+                                self.remove_backlog.remove(j);
+                                self.remove_network_operation(item);
+                                removed = true;
+                            }
+                        } else {
+                            j += 1;
+                        }
                     }
                 } else {
                     return;
@@ -163,5 +178,27 @@ impl SharQueue {
                 self.add_backlog.push(op);
             }
         };
+    }
+
+    pub fn remove_network_operation(&mut self, op: RemoveOperation) {
+        let op_clone = op.clone();
+        let file_path = op_clone.file_path;
+        let id = op_clone.id;
+        let peer = op_clone.peer;
+        let row = op_clone.row;
+
+        let removed = self.tree.remove_crdt(&file_path, row, id, peer);
+
+        match removed {
+            Ok(pos) => {
+                if let Some(val) = pos {
+                    (self.remove_callback)(val.0, val.1, val.2);
+                } else {
+                    // if the remove returns none, the value has already been removed so do nothing
+                    return;
+                }
+            }
+            Err(_e) => self.remove_backlog.push(op),
+        }
     }
 }

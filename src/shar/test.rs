@@ -110,21 +110,21 @@ mod tree_tests {
         // a sign these three ids/peers weren't as distinct as intended)
         assert!(
             replica_a
-                .add_crdt(&path_a, 0, op_x.clone(), false)
+                .add_crdt(0, op_x.clone(), false)
                 .expect("a: failed to apply x")
                 .is_some(),
             "a: x should be a real insert, not a no-op"
         );
         assert!(
             replica_a
-                .add_crdt(&path_a, 0, op_y.clone(), false)
+                .add_crdt(0, op_y.clone(), false)
                 .expect("a: failed to apply y")
                 .is_some(),
             "a: y should be a real insert, not a no-op"
         );
         assert!(
             replica_a
-                .add_crdt(&path_a, 0, op_z.clone(), false)
+                .add_crdt(0, op_z.clone(), false)
                 .expect("a: failed to apply z")
                 .is_some(),
             "a: z should be a real insert, not a no-op"
@@ -133,21 +133,21 @@ mod tree_tests {
         // ...replica_b applies them in the reverse order...
         assert!(
             replica_b
-                .add_crdt(&path_b, 0, op_z.clone(), false)
+                .add_crdt(0, op_z.clone(), false)
                 .expect("b: failed to apply z")
                 .is_some(),
             "b: z should be a real insert, not a no-op"
         );
         assert!(
             replica_b
-                .add_crdt(&path_b, 0, op_y.clone(), false)
+                .add_crdt(0, op_y.clone(), false)
                 .expect("b: failed to apply y")
                 .is_some(),
             "b: y should be a real insert, not a no-op"
         );
         assert!(
             replica_b
-                .add_crdt(&path_b, 0, op_x.clone(), false)
+                .add_crdt(0, op_x.clone(), false)
                 .expect("b: failed to apply x")
                 .is_some(),
             "b: x should be a real insert, not a no-op"
@@ -156,21 +156,21 @@ mod tree_tests {
         // ...and replica_c applies them in yet another order
         assert!(
             replica_c
-                .add_crdt(&path_c, 0, op_y.clone(), false)
+                .add_crdt(0, op_y.clone(), false)
                 .expect("c: failed to apply y")
                 .is_some(),
             "c: y should be a real insert, not a no-op"
         );
         assert!(
             replica_c
-                .add_crdt(&path_c, 0, op_x.clone(), false)
+                .add_crdt(0, op_x.clone(), false)
                 .expect("c: failed to apply x")
                 .is_some(),
             "c: x should be a real insert, not a no-op"
         );
         assert!(
             replica_c
-                .add_crdt(&path_c, 0, op_z.clone(), false)
+                .add_crdt(0, op_z.clone(), false)
                 .expect("c: failed to apply z")
                 .is_some(),
             "c: z should be a real insert, not a no-op"
@@ -263,7 +263,7 @@ mod tree_tests {
         let (parent_id, parent_peer) = file.get_id_peer((3, 3)).expect("'T' should still be there");
         let c = CRDT::new(35, 0, CrdtRelation::new('!', parent_id, parent_peer));
         let position = file
-            .add_crdt(&file_path, 3, c, false)
+            .add_crdt(3, c, false)
             .expect("failed to add character using looked-up parent");
         assert_eq!(position, Some((3, 4)), "'!' should land right after 'T'");
 
@@ -300,7 +300,7 @@ mod tree_tests {
         // with (and get silently no-op'd against) real content already loaded
         let a = CRDT::new(1050, 0, CrdtRelation::new('a', newline_id, 0));
         let position = file
-            .add_crdt(&file_path, new_line, a, true)
+            .add_crdt(new_line, a, true)
             .expect("failed to add front-of-line character 'a'");
         assert_eq!(
             position,
@@ -310,7 +310,7 @@ mod tree_tests {
 
         let b = CRDT::new(1010, 0, CrdtRelation::new('b', newline_id, 0));
         let position = file
-            .add_crdt(&file_path, new_line, b, true)
+            .add_crdt(new_line, b, true)
             .expect("failed to add front-of-line character 'b'");
         assert_eq!(
             position,
@@ -320,7 +320,7 @@ mod tree_tests {
 
         let c = CRDT::new(1999, 0, CrdtRelation::new('c', newline_id, 0));
         let position = file
-            .add_crdt(&file_path, new_line, c, true)
+            .add_crdt(new_line, c, true)
             .expect("failed to add front-of-line character 'c'");
         assert_eq!(
             position,
@@ -330,7 +330,7 @@ mod tree_tests {
 
         let d = CRDT::new(1500, 0, CrdtRelation::new('d', newline_id, 0));
         let position = file
-            .add_crdt(&file_path, new_line, d, true)
+            .add_crdt(new_line, d, true)
             .expect("failed to add front-of-line character 'd'");
         assert_eq!(
             position,

@@ -73,17 +73,15 @@ pub struct RemoveOperation {
     pub id: u32,
     pub peer: u8,
     pub row: usize,
-    pub is_whole_line: bool,
 }
 
 impl RemoveOperation {
-    pub fn new(file_path: PathBuf, id: u32, peer: u8, row: usize, is_whole_line: bool) -> Self {
+    pub fn new(file_path: PathBuf, id: u32, peer: u8, row: usize) -> Self {
         RemoveOperation {
             file_path: file_path,
             id: id,
             peer: peer,
             row: row,
-            is_whole_line: is_whole_line,
         }
     }
 }

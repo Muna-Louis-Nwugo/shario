@@ -87,7 +87,7 @@ impl SharFile {
             start_of_line = is_line_break(prev);
 
             // safe to ignore: file_path always matches self's own path during initial load
-            let _ = self.add_crdt(&file_path, line, crdt, start_of_line);
+            let _ = self.add_crdt(line, crdt, start_of_line);
 
             if is_line_break(c) {
                 line += 1;
@@ -303,7 +303,6 @@ impl SharFile {
     /// Adds a CRDT to the tree.
     pub fn add_crdt(
         &mut self,
-        file_path: &PathBuf,
         line_num: usize,
         crdt: CRDT,
         start_line: bool,
@@ -445,23 +444,21 @@ impl SharFile {
     }
 
     /// removes a crdt from file
+    ///
+    ///
     pub fn remove_crdt(
         &mut self,
-        file_path: &PathBuf,
         line_num: usize,
         id: IdSize,
         peer: PeerIdSize,
-    ) -> Result<()> {
-        if file_path != &self.file_path {
-            return Err(Error::Generic(String::from("Oops! Wrong file")));
-        }
+    ) -> Result<Option<(usize, usize, bool)>> {
         // remove the crdt from the HashMap
         let crdt_relation = self.characters.get_mut(&(id, peer));
 
         match crdt_relation {
             Some(val) => {
                 if val.deleted {
-                    return Ok(());
+                    return Ok(None);
                 }
                 val.deleted = true;
             }
@@ -483,7 +480,7 @@ impl SharFile {
 
             // delete the line
             self.projection.remove(line);
-            return Ok(());
+            return Ok(Some((line, 0, true)));
         }
 
         // find the value in the projection and delete it
@@ -492,7 +489,7 @@ impl SharFile {
         match position {
             Ok(pos) => {
                 self.projection[pos.0].remove(pos.1);
-                Ok(())
+                Ok(Some((pos.0, pos.1, false)))
             }
 
             Err(_e) => Err(Error::Generic(String::from("crdt not found"))),
@@ -562,7 +559,7 @@ impl SharDirectory {
 
         // recursively search for the end of the path
         if let Some(file) = self.find_file(path) {
-            return file.add_crdt(file_path, line_num, crdt, start_line);
+            return file.add_crdt(line_num, crdt, start_line);
         } else {
             Err(Error::Generic(String::from("File not found")))
         }
@@ -575,13 +572,12 @@ impl SharDirectory {
         line_num: usize,
         id: IdSize,
         peer: PeerIdSize,
-    ) -> Result<()> {
+    ) -> Result<Option<(usize, usize, bool)>> {
         let path = file_path.iter();
 
         // recursively search for the end of the path
         if let Some(file) = self.find_file(path) {
-            file.remove_crdt(file_path, line_num, id, peer)?;
-            Ok(())
+            return file.remove_crdt(line_num, id, peer);
         } else {
             Err(Error::Generic(String::from("File not found")))
         }

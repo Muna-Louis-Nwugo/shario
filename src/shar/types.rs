@@ -1,28 +1,12 @@
 //! Shar types for crdts and operations
 
 // GLOBAL VARIABLES
-/// Types of operations that can be made
-#[derive(Clone)]
-pub enum OperationType {
-    AddChar,
-    RemoveChar,
-}
 
-impl OperationType {
-    /// Converts operation types into bytes for serializtion:  
-    ///
-    /// AddChar is 0x00FF  
-    /// RemoveChar is 0XFF00  
-    /// ChangeChar is 0XFFFF  
-    pub fn value(self) -> [u8; 2] {
-        match self {
-            OperationType::AddChar => [0u8, 1u8],
-            OperationType::RemoveChar => [1u8, 0u8],
-        }
-    }
-}
+use std::path::PathBuf;
 
-#[derive(PartialEq, Clone, Debug)]
+use axum::extract::Path;
+
+#[derive(Copy, PartialEq, Clone, Debug)]
 pub struct CrdtRelation {
     pub value: char,
     pub parent_id: u32,
@@ -42,7 +26,7 @@ impl CrdtRelation {
 }
 
 /// A CrdtRelation together with the identity (id, peer) of the node it describes.
-#[derive(PartialEq, Clone, Debug)]
+#[derive(Copy, PartialEq, Clone, Debug)]
 pub struct CRDT {
     pub id: u32,
     pub peer: u8,
@@ -60,19 +44,46 @@ impl CRDT {
 }
 
 ///crdt: [CRDT] -> A CRDT
-///operation_type: [OperationType] -> The type of operation being performed
 ///peer: u32 -> The user_id that created the operation
 #[derive(Clone)]
-pub struct Operation {
+pub struct AddOperation {
+    pub file_path: PathBuf,
     pub crdt: CRDT,
-    pub operation_type: OperationType,
+    pub row: usize,
+    pub start_line: bool,
 }
 
-impl Operation {
-    pub fn new(crdt: CRDT, operation_type: OperationType) -> Self {
-        Operation {
+impl AddOperation {
+    pub fn new(path: PathBuf, crdt: CRDT, row: usize, start_line: bool) -> Self {
+        AddOperation {
+            file_path: path,
             crdt: crdt,
-            operation_type: operation_type,
+            row: row,
+            start_line: start_line,
+        }
+    }
+}
+
+///id: [u32] -> The id of the crdt being removed
+///peer: [u8] -> The peer of the crdt being removed
+///is_whole_line: [bool] -> Whether the target is a whole-line anchor removal
+#[derive(Clone)]
+pub struct RemoveOperation {
+    pub file_path: PathBuf,
+    pub id: u32,
+    pub peer: u8,
+    pub row: usize,
+    pub is_whole_line: bool,
+}
+
+impl RemoveOperation {
+    pub fn new(file_path: PathBuf, id: u32, peer: u8, row: usize, is_whole_line: bool) -> Self {
+        RemoveOperation {
+            file_path: file_path,
+            id: id,
+            peer: peer,
+            row: row,
+            is_whole_line: is_whole_line,
         }
     }
 }

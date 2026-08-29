@@ -75,12 +75,14 @@ impl SharFile {
         let mut line = 0;
         let mut start_of_line;
         let mut prev: char = char::from(0);
+        let mut prev_id = 0;
 
         for (_i, c) in file_contents.char_indices() {
             *counter += 1;
             let id = counter.clone();
 
-            let crdt = CRDT::new(id, 0, CrdtRelation::new(c, id - 1, 0));
+            let crdt = CRDT::new(id, 0, CrdtRelation::new(c, prev_id, 0));
+            prev_id = id;
 
             start_of_line = is_line_break(prev);
 
@@ -306,10 +308,6 @@ impl SharFile {
         crdt: CRDT,
         start_line: bool,
     ) -> Result<Option<(usize, usize)>> {
-        if file_path != &self.file_path {
-            return Err(Error::Generic(String::from("Oops! Wrong file")));
-        }
-
         let id = crdt.id;
         let peer = crdt.peer;
         let relation = &crdt.relation;
@@ -321,7 +319,14 @@ impl SharFile {
         }
 
         if !self.characters.is_empty() {
-            parent_exists = !self.characters[&(relation.parent_id, relation.parent_peer)].deleted;
+            if let Some(par) = self
+                .characters
+                .get(&(relation.parent_id, relation.parent_peer))
+            {
+                parent_exists = !par.deleted;
+            } else {
+                return Err(Error::Generic(String::from("Parent does not exist")));
+            }
         } else {
             parent_exists = true;
         }
@@ -451,9 +456,9 @@ impl SharFile {
             return Err(Error::Generic(String::from("Oops! Wrong file")));
         }
         // remove the crdt from the HashMap
-        let crdt = self.characters.get_mut(&(id, peer));
+        let crdt_relation = self.characters.get_mut(&(id, peer));
 
-        match crdt {
+        match crdt_relation {
             Some(val) => {
                 if val.deleted {
                     return Ok(());
@@ -619,6 +624,9 @@ impl SharDirectory {
             return None;
         }
 
+        // clone the path for recursive use
+        let path_copy = path.clone();
+
         let root = self.dir_name.iter();
 
         // use up the iterator until it gets past the root of the shar
@@ -657,7 +665,7 @@ impl SharDirectory {
                 // recursively call this function on it
                 for dir in &mut self.sub_dir {
                     if dir.dir_name.ends_with(next) {
-                        return dir.find_file(path);
+                        return dir.find_file(path_copy);
                     }
                 }
                 return None;

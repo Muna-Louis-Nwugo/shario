@@ -19,8 +19,6 @@ pub type CrdtRelation = types::CrdtRelation;
 
 pub type CRDT = types::CRDT;
 
-pub type OperationType = types::OperationType;
-
 // GLOBAL VARIABLES / PRIMITIVE TYPE ALIASES
 
 pub type IdSize = u32;

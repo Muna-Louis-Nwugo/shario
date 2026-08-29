@@ -133,7 +133,9 @@ impl SharQueue {
                     callback(position.0, position.1);
 
                     // traverse the add_backlog to see if we have any inserts depending on this
-                    for i in 0..self.add_backlog.len() {
+                    let mut i = 0;
+
+                    while i < self.add_backlog.len() {
                         let item = self.add_backlog[i].clone();
 
                         let item_crdt = item.crdt;
@@ -143,6 +145,8 @@ impl SharQueue {
                         {
                             self.add_backlog.remove(i);
                             self.add_network_operation(item, callback);
+                        } else {
+                            i += 1;
                         }
                     }
 

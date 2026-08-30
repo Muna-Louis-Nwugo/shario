@@ -4,8 +4,6 @@
 
 use std::path::PathBuf;
 
-use axum::extract::Path;
-
 #[derive(Copy, PartialEq, Clone, Debug)]
 pub struct CrdtRelation {
     pub value: char,

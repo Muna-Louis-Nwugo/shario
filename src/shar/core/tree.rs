@@ -1,13 +1,26 @@
-//! Contains character tree that manages local state
+//! The actual CRDT tree: [`SharFile`] holds one file's character state, and
+//! [`SharDirectory`] recursively mirrors a directory of them, routing every
+//! operation to the right file by path.
+//!
+//! Each `SharFile` keeps two views of the same data:
+//! - `characters`: the real CRDT state, an id-keyed map of every character ever
+//!   inserted (including tombstoned ones — there's no garbage collection yet),
+//!   each pointing at its parent's `(id, peer)`.
+//! - `projection`: a derived `line -> column -> (id, peer)` view, rebuilt
+//!   incrementally as `characters` changes, purely for the IDE's benefit (it
+//!   thinks in positions, not ids). Tombstoned characters are dropped from here
+//!   immediately, even though they stay in `characters` forever.
+//!
+//! Resolving a node's *current* position from just its `(id, peer)` (e.g. to
+//! place a new sibling, or to find where to delete from) is what
+//! [`SharFile::find_crdt`]'s ring search and [`SharFile::find_tombstone`]'s
+//! recursive climb exist for.
+
 use std::fmt;
 
 use crate::shar::prelude::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
-
-// A vector representation of a file's line. Each element is a decomposed CRDT in tuple form:
-//
-// (value, parent_id, parent_peer_id)
 
 /// Characters that end a projection line rather than occupying a column in one.
 fn is_line_break(c: char) -> bool {
@@ -17,12 +30,31 @@ fn is_line_break(c: char) -> bool {
     )
 }
 
-/// Represents a file in the shar
+/// One file's CRDT state, in both its id-keyed form and its derived
+/// line/column projection. See the module docs for how the two relate.
 #[derive(Debug, Clone)]
 pub struct SharFile {
+    /// This file's location. Not part of the CRDT state itself — two replicas
+    /// of the same logical file can (and often will) live at different local
+    /// paths, but should still compare equal once converged (see the
+    /// `PartialEq` impl below, which deliberately excludes this field).
     file_path: PathBuf,
+    /// Every character ever inserted, live or tombstoned, keyed by its
+    /// globally-unique `(id, peer)` identity. `(0, 0)` is the root sentinel —
+    /// not a real character, just "nothing before this" for the very first
+    /// character of the file.
     characters: HashMap<(IdSize, PeerIdSize), CrdtRelation>,
+    /// The derived `line -> column -> (id, peer)` view the IDE actually reads
+    /// from. Tombstoned characters are removed from here as soon as they're
+    /// deleted, even though they remain in `characters` forever.
     projection: Vec<Vec<(IdSize, PeerIdSize)>>,
+    /// Per line, the `(id, peer)` of whatever anchors that line's start — the
+    /// newline ending the previous line, or the root sentinel for line 0.
+    /// Needed because a line's true first-character parent (a newline, or the
+    /// sentinel) is never itself stored in `projection`, so there'd otherwise
+    /// be no way to resolve a front-of-line insert's parent at all. Kept in
+    /// lockstep with `projection`'s indices — shifted on line split/merge the
+    /// same way `projection` itself is.
     line_start_ids: Vec<(IdSize, PeerIdSize)>,
 }
 
@@ -35,6 +67,10 @@ impl PartialEq for SharFile {
 }
 
 impl SharFile {
+    /// Loads `file_path` from disk and builds its initial CRDT tree, assigning
+    /// each character a sequentially-increasing id from `counter`. `counter` is
+    /// shared across an entire `SharDirectory`, not reset per file — see
+    /// [`Self::add_file`] for why that's safe.
     // TODO: Tree traversal to reconstruct file
     pub fn new(file_path: PathBuf, counter: &mut u32) -> Result<Self> {
         let file = std::fs::read_to_string(&file_path);
@@ -62,7 +98,13 @@ impl SharFile {
         }
     }
 
-    /// Adds all the contents of a file to the tree.
+    /// Seeds the root sentinel, then inserts every character of `file_contents`
+    /// in order, each parented on the character immediately before it *within
+    /// this file* (`prev_id`, reset to the sentinel at the start of every
+    /// file). Deliberately not `id - 1`: `counter` is shared across every file
+    /// in a directory, so `id - 1` would sometimes be the last character of a
+    /// *different* file loaded just before this one, which doesn't exist in
+    /// this file's own `characters` map and would fail to resolve.
     fn add_file(&mut self, file_contents: String, counter: &mut u32) {
         // the shar specification states that peer 0 is reserved for the char itself to add to the
         // tree as necessary
@@ -110,7 +152,9 @@ impl SharFile {
         self.projection.insert(coordinates.0 + 1, new_line);
     }
 
-    /// returns the id, peer pair at a specific index
+    /// Looks up the `(id, peer)` currently sitting at `(line, column)` in the
+    /// projection. Returns `None` if either coordinate is out of bounds, never
+    /// panics.
     pub fn get_id_peer(&self, coordinates: (usize, usize)) -> Option<(IdSize, PeerIdSize)> {
         if coordinates.0 <= self.projection.len() - 1 {
             let val = self.projection[coordinates.0].get(coordinates.1);
@@ -125,6 +169,10 @@ impl SharFile {
         }
     }
 
+    /// Looks up `line_number`'s start-of-line anchor — the `(id, peer)` of the
+    /// newline (or root sentinel, for line 0) that a front-of-line insert on
+    /// this line should be parented on. See `line_start_ids`. Returns `None`
+    /// if the line number is out of bounds.
     pub fn get_line_id_peer(&self, line_number: usize) -> Option<(IdSize, PeerIdSize)> {
         let id_peer = self.line_start_ids.get(line_number);
 
@@ -137,9 +185,19 @@ impl SharFile {
         }
     }
 
-    /// finds a crdt by performing a ring search starting from the parent's presumed
-    /// location and stepping up to the top of the file and down to the bottom of the file to find
-    /// it
+    /// Finds `(id, peer)`'s *current* position in the projection, treating
+    /// `line_num` only as a starting guess, never as ground truth.
+    ///
+    /// Checks `line_num` itself first, then rings outward — one line up, one
+    /// line down, two up, two down, and so on — until it finds a match or runs
+    /// off both ends of the file. This is what makes a stale hint (e.g. a
+    /// remote op whose sender computed `line_num` before seeing concurrent
+    /// local edits that shifted lines around) a *performance* cost rather than
+    /// a correctness bug: the search always terminates on the real position,
+    /// it just costs more the further off the hint was.
+    ///
+    /// `(0, 0)` short-circuits immediately — that's the root sentinel, which
+    /// was never inserted into the projection in the first place.
     fn find_crdt(&self, line_num: usize, id: IdSize, peer: PeerIdSize) -> Result<(usize, usize)> {
         // nothing has been added yet, so there's nothing to search for — this must be the root
         // sentinel parent of the very first character
@@ -211,7 +269,18 @@ impl SharFile {
         }
     }
 
-    /// finds where a tombstone would have been recursively
+    /// Resolves where a new child of `(id, peer)` should be inserted, when
+    /// `(id, peer)`'s own relation says its *parent* has already been deleted.
+    ///
+    /// A tombstoned node has no position in the projection to anchor on
+    /// (`find_crdt` would find nothing), so this climbs the parent chain
+    /// recursively — skipping over each deleted ancestor in turn — until it
+    /// reaches either a live ancestor (resolved via `find_crdt`) or the root
+    /// sentinel, then walks forward from there applying the same id/peer
+    /// tie-break rule `add_crdt` uses for ordinary siblings. In effect: figure
+    /// out where the deleted node *would* still be if it hadn't been removed,
+    /// so a child parented on it lands in the right place relative to its
+    /// still-live siblings.
     fn find_tombstone(
         &self,
         line_num: usize,
@@ -300,7 +369,26 @@ impl SharFile {
         }
     }
 
-    /// Adds a CRDT to the tree.
+    /// Inserts a single character into the tree.
+    ///
+    /// `line_num` is a ring-search hint for resolving `crdt`'s parent, not a
+    /// guaranteed final position — see `find_crdt`. `start_line` marks a
+    /// front-of-line insert (parent is a newline or the root sentinel, neither
+    /// of which live in the projection), which resolves via `line_start_ids`
+    /// instead of a coordinate search.
+    ///
+    /// Once a parent position is resolved, new siblings are ordered by walking
+    /// forward from it and comparing against whatever's already there: a
+    /// larger id goes first, and equal ids (a same-tick concurrent insert from
+    /// two different peers) tie-break on the smaller peer id going first. This
+    /// walk is what guarantees replicas converge regardless of what order they
+    /// apply concurrent inserts in — see `test_convergence`.
+    ///
+    /// Returns `Ok(None)` for a duplicate/retried op that's already applied
+    /// (a no-op, not an error), `Ok(Some(position))` for a real insert, and
+    /// `Err` if the parent doesn't exist on this replica yet (the "out of
+    /// order delivery" case — see `SharQueue::add_network_operation`, which is
+    /// what actually catches this and backlogs the op for later).
     pub fn add_crdt(
         &mut self,
         line_num: usize,
@@ -443,9 +531,22 @@ impl SharFile {
         }
     }
 
-    /// removes a crdt from file
+    /// Tombstones a character and drops it from the projection.
     ///
+    /// Idempotent: removing an already-deleted `(id, peer)` is a no-op that
+    /// returns `Ok(None)`, not an error. Removing an id that was never inserted
+    /// at all is an `Err`.
     ///
+    /// If `(id, peer)` is itself a line's start-of-line anchor (a newline),
+    /// removing it merges that line onto the one above it — splicing its
+    /// projection contents onto the previous line, dropping the now-empty line
+    /// and its `line_start_ids` entry, and shifting every later line's anchor
+    /// down by one index to match. The root sentinel can never be a removal
+    /// target (nothing calls this with `(0, 0)`), so there's always a "line
+    /// above" to merge into. On success, returns `Some((row, col, true))` for
+    /// this line-merge case, or `Some((row, col, false))` for an ordinary
+    /// single-character removal — the caller uses that flag to know whether a
+    /// merge happened.
     pub fn remove_crdt(
         &mut self,
         line_num: usize,
@@ -503,15 +604,25 @@ impl<'a> fmt::Display for SharFile {
     }
 }
 
-/// Rerpresents a directory in the shar
+/// One directory in the shar, holding its own files and recursively mirroring
+/// its subdirectories. Every operation on a specific file is routed here by
+/// path (see [`Self::find_file`]) and delegated to the matching [`SharFile`].
 pub struct SharDirectory {
+    /// This directory's own path.
     dir_name: PathBuf,
+    /// Direct child directories, each recursively holding its own tree.
     sub_dir: Vec<SharDirectory>,
+    /// Files directly inside this directory (not in a subdirectory).
     sub_files: Vec<SharFile>,
 }
 
 impl SharDirectory {
-    /// Doesn't yet support symlinks anywhere in the tree being initialized
+    /// Recursively walks `dir_path`, loading every file into a [`SharFile`]
+    /// and every subdirectory into a nested `SharDirectory`. `counter` is
+    /// threaded through and shared across every file in the whole tree, so ids
+    /// are unique across the entire directory, not just within one file.
+    ///
+    /// Doesn't yet support symlinks anywhere in the tree being initialized.
     pub fn new(dir_path: PathBuf, counter: &mut u32) -> Result<Self> {
         let entries = std::fs::read_dir(&dir_path);
         let mut sub_dir_vector = Vec::new();
@@ -547,7 +658,8 @@ impl SharDirectory {
         }
     }
 
-    /// adds a crdt
+    /// Routes to `file_path`'s [`SharFile`] and delegates — see
+    /// [`SharFile::add_crdt`] for the actual insertion logic.
     pub fn add_crdt(
         &mut self,
         file_path: &PathBuf,
@@ -565,7 +677,8 @@ impl SharDirectory {
         }
     }
 
-    /// removes a crdt
+    /// Routes to `file_path`'s [`SharFile`] and delegates — see
+    /// [`SharFile::remove_crdt`] for the actual removal logic.
     pub fn remove_crdt(
         &mut self,
         file_path: &PathBuf,
@@ -583,7 +696,8 @@ impl SharDirectory {
         }
     }
 
-    /// finds the (id, peer) pair for an element at a given location
+    /// Routes to `file_path`'s [`SharFile`] and delegates — see
+    /// [`SharFile::get_id_peer`].
     pub fn get_id_peer(
         &mut self,
         file_path: &PathBuf,
@@ -598,7 +712,8 @@ impl SharDirectory {
         }
     }
 
-    /// finds the (id, peer) pair for a line
+    /// Routes to `file_path`'s [`SharFile`] and delegates — see
+    /// [`SharFile::get_line_id_peer`].
     pub fn get_line_id_peer(
         &mut self,
         file_path: &PathBuf,
@@ -613,7 +728,14 @@ impl SharDirectory {
         }
     }
 
-    /// finds the SharFile corresponding to a path
+    /// Finds the `SharFile` at `path`, recursing into subdirectories as needed.
+    ///
+    /// At each level, `path`'s components matching this directory's own
+    /// `dir_name` are consumed first, then the next component is matched
+    /// against either `sub_files` (if it's the last component — a file) or
+    /// `sub_dir` (otherwise, recursing with the *original*, unstripped path
+    /// passed down fresh, since each level's own `dir_name` is always a valid
+    /// prefix of the true full path, at any depth).
     fn find_file<'a>(&'a mut self, mut path: std::path::Iter<'_>) -> Option<&'a mut SharFile> {
         // check if there even is anything in here?
         if self.sub_dir.is_empty() && self.sub_files.is_empty() {

@@ -1,9 +1,10 @@
 //! `SharQueue` mediates between the IDE and the CRDT tree, and backlogs
 //! out-of-order remote ops until their dependency arrives.
 
+use crate::shar::core::tree::SharDirectory;
 use crate::shar::prelude::*;
-use crate::shar::types::CrdtRelation;
-use crate::shar::{core::tree::SharDirectory, types::AddOperation, types::RemoveOperation};
+use crate::types::CrdtRelation;
+use crate::types::{AddOperation, RemoveOperation};
 use std::path::PathBuf;
 
 /// Owns the tree for one shar session and mediates every read/write to it.

@@ -1,7 +1,7 @@
 //! Common imports/aliases: `use crate::shar::prelude::*;`.
 
 pub use super::error::Error;
-use crate::shar::types;
+use crate::types;
 use tokio::io;
 
 /// The crate-wide `Result` alias.
@@ -15,10 +15,10 @@ pub struct W<T>(pub T);
 
 // GLOBAL STRUCTS
 
-/// See [`crate::shar::types::CrdtRelation`].
+/// See [`crate::types::CrdtRelation`].
 pub type CrdtRelation = types::CrdtRelation;
 
-/// See [`crate::shar::types::CRDT`].
+/// See [`crate::types::CRDT`].
 pub type CRDT = types::CRDT;
 
 // GLOBAL VARIABLES / PRIMITIVE TYPE ALIASES

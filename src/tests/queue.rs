@@ -1,6 +1,6 @@
 use crate::shar::core::queue::SharQueue;
 use crate::shar::prelude::{CRDT, CrdtRelation};
-use crate::shar::types::{AddOperation, RemoveOperation};
+use crate::types::{AddOperation, RemoveOperation};
 use std::cell::RefCell;
 use std::path::PathBuf;
 

@@ -4,8 +4,10 @@
 
 use std::path::PathBuf;
 
+use serde::Deserialize;
+
 /// A node's value, parent pointer, and deleted flag.
-#[derive(Copy, PartialEq, Clone, Debug)]
+#[derive(Copy, PartialEq, Clone, Debug, Deserialize)]
 pub struct CrdtRelation {
     /// The character this node represents.
     pub value: char,
@@ -29,7 +31,7 @@ impl CrdtRelation {
 }
 
 /// A [`CrdtRelation`] plus the `(id, peer)` identity of the node it describes.
-#[derive(Copy, PartialEq, Clone, Debug)]
+#[derive(Copy, PartialEq, Clone, Debug, Deserialize)]
 pub struct CRDT {
     /// Unique when paired with `peer`.
     pub id: u32,
@@ -48,10 +50,10 @@ impl CRDT {
     }
 }
 
-/// A single character insertion, local or remote. See
+/// A single character remote insertion. See
 /// [`crate::shar::core::queue::SharQueue`].
-#[derive(Clone)]
-pub struct AddOperation {
+#[derive(Clone, Deserialize, Debug)]
+pub struct NetworkAdd {
     /// The file this insertion belongs to.
     pub file_path: PathBuf,
     /// The character being inserted, with its resolved parent.
@@ -62,9 +64,9 @@ pub struct AddOperation {
     pub start_line: bool,
 }
 
-impl AddOperation {
+impl NetworkAdd {
     pub fn new(path: PathBuf, crdt: CRDT, row: usize, start_line: bool) -> Self {
-        AddOperation {
+        NetworkAdd {
             file_path: path,
             crdt: crdt,
             row: row,
@@ -73,10 +75,10 @@ impl AddOperation {
     }
 }
 
-/// A single character removal, local or remote — just a target `(id, peer)`,
+/// A single character remote removal — just a target `(id, peer)`,
 /// no value or parent needed. See [`crate::shar::core::queue::SharQueue`].
-#[derive(Clone)]
-pub struct RemoveOperation {
+#[derive(Clone, Debug, Deserialize)]
+pub struct NetworkRemove {
     /// The file this removal belongs to.
     pub file_path: PathBuf,
     /// Target id.
@@ -87,13 +89,72 @@ pub struct RemoveOperation {
     pub row: usize,
 }
 
-impl RemoveOperation {
+impl NetworkRemove {
     pub fn new(file_path: PathBuf, id: u32, peer: u8, row: usize) -> Self {
-        RemoveOperation {
+        NetworkRemove {
             file_path: file_path,
             id: id,
             peer: peer,
             row: row,
+        }
+    }
+}
+
+/// A single character IDE insertion. See
+/// [`crate::shar::core::queue::SharQueue`].
+#[derive(Clone, Debug, Deserialize)]
+pub struct IdeAdd {
+    /// The file this addition belongs to
+    pub file_path: PathBuf,
+    /// the row of the this addition's parent
+    pub parent_row: usize,
+    /// the col of this addition's parent
+    pub parent_col: usize,
+    /// the value of this addition
+    pub val: char,
+    /// is this position at the beginning of a line?
+    pub start_line: bool,
+}
+
+impl IdeAdd {
+    pub fn new(
+        file_path: PathBuf,
+        parent_row: usize,
+        parent_col: usize,
+        val: char,
+        start_line: bool,
+    ) -> Self {
+        IdeAdd {
+            file_path: file_path,
+            parent_row: parent_row,
+            parent_col: parent_col,
+            val: val,
+            start_line: start_line,
+        }
+    }
+}
+
+/// A single character IDE removal — just a target `(id, peer)`,
+/// no value or parent needed. See [`crate::shar::core::queue::SharQueue`].
+#[derive(Clone, Debug, Deserialize)]
+pub struct IdeRemove {
+    /// The file this removal belongs to
+    pub file_path: PathBuf,
+    /// the row of the this removal
+    pub row: usize,
+    /// the col of this removal
+    pub col: usize,
+    /// is this removal a line?
+    pub is_whole_line: bool,
+}
+
+impl IdeRemove {
+    pub fn new(file_path: PathBuf, row: usize, col: usize, is_whole_line: bool) -> Self {
+        IdeRemove {
+            file_path: file_path,
+            row: row,
+            col: col,
+            is_whole_line: is_whole_line,
         }
     }
 }

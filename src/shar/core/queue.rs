@@ -3,16 +3,16 @@
 
 use crate::shar::core::tree::SharDirectory;
 use crate::shar::prelude::*;
-use crate::types::CrdtRelation;
-use crate::types::{AddOperation, RemoveOperation};
+use crate::types::{CrdtRelation, IdeAdd, IdeRemove};
+use crate::types::{NetworkAdd, NetworkRemove};
 use std::path::PathBuf;
 
 /// Owns the tree for one shar session and mediates every read/write to it.
 pub struct SharQueue {
     /// Remote adds waiting on a parent that hasn't arrived yet.
-    add_backlog: Vec<AddOperation>,
+    add_backlog: Vec<NetworkAdd>,
     /// Remote removes waiting on a target that hasn't arrived yet.
-    remove_backlog: Vec<RemoveOperation>,
+    remove_backlog: Vec<NetworkRemove>,
     /// This replica's peer id.
     peer: PeerIdSize,
     tree: SharDirectory,
@@ -48,24 +48,24 @@ impl SharQueue {
         Ok(queue)
     }
 
-    /// Applies a locally-typed character and returns the `AddOperation` to
+    /// Applies a locally-typed character and returns the `NetworkAdd` to
     /// send to peers. `start_line` resolves the parent via the line's
     /// start-of-line anchor instead of `(parent_row, parent_col)`.
-    pub fn add_ide_crdt(
-        &mut self,
-        file_path: &PathBuf,
-        parent_row: usize,
-        parent_col: usize,
-        val: char,
-        start_line: bool,
-    ) -> Result<AddOperation> {
+    pub fn add_ide_crdt(&mut self, op: IdeAdd) -> Result<NetworkAdd> {
+        let op_clone = op.clone();
+        let file_path = op_clone.file_path;
+        let parent_row = op_clone.parent_row;
+        let parent_col = op_clone.parent_col;
+        let val = op_clone.val;
+        let start_line = op_clone.start_line;
+
         // find the parent id
 
         let parent_id_peer;
         if start_line {
-            parent_id_peer = self.tree.get_line_id_peer(file_path, parent_row);
+            parent_id_peer = self.tree.get_line_id_peer(&file_path, parent_row);
         } else {
-            parent_id_peer = self.tree.get_id_peer(file_path, (parent_row, parent_col));
+            parent_id_peer = self.tree.get_id_peer(&file_path, (parent_row, parent_col));
         }
 
         match parent_id_peer {
@@ -75,9 +75,9 @@ impl SharQueue {
                     let relation = CrdtRelation::new(val, parent_real.0, parent_real.1);
                     let crdt = CRDT::new(self.counter, self.peer, relation);
                     let op =
-                        AddOperation::new(file_path.clone(), crdt.clone(), parent_row, start_line);
+                        NetworkAdd::new(file_path.clone(), crdt.clone(), parent_row, start_line);
 
-                    let _ = self.tree.add_crdt(file_path, parent_row, crdt, start_line);
+                    let _ = self.tree.add_crdt(&file_path, parent_row, crdt, start_line);
                     Ok(op)
                 } else {
                     Err(Error::Generic(String::from("position not found")))
@@ -88,23 +88,23 @@ impl SharQueue {
         }
     }
 
-    /// Applies a locally-triggered removal and returns the `RemoveOperation` to
+    /// Applies a locally-triggered removal and returns the `NetworkRemove` to
     /// send to peers. `is_whole_line` removes `row`'s line-start anchor
     /// instead of `(row, col)`. Rejects the root sentinel as a target.
-    pub fn remove_ide_crdt(
-        &mut self,
-        file_path: &PathBuf,
-        row: usize,
-        col: usize,
-        is_whole_line: bool,
-    ) -> Result<RemoveOperation> {
+    pub fn remove_ide_crdt(&mut self, op: IdeRemove) -> Result<NetworkRemove> {
+        let op_clone = op.clone();
+
+        let file_path = op_clone.file_path;
+        let row = op_clone.row;
+        let col = op_clone.col;
+        let is_whole_line = op_clone.is_whole_line;
         // find the id/peer of the crdt
         let id_peer;
 
         if is_whole_line {
-            id_peer = self.tree.get_line_id_peer(file_path, row)?;
+            id_peer = self.tree.get_line_id_peer(&file_path, row)?;
         } else {
-            id_peer = self.tree.get_id_peer(file_path, (row, col))?;
+            id_peer = self.tree.get_id_peer(&file_path, (row, col))?;
         }
 
         match id_peer {
@@ -114,8 +114,8 @@ impl SharQueue {
                     return Err(Error::OutOfBounds(String::from("Can't remove sentinel")));
                 }
 
-                let _ = self.tree.remove_crdt(file_path, row, id_peer.0, id_peer.1);
-                Ok(RemoveOperation::new(
+                let _ = self.tree.remove_crdt(&file_path, row, id_peer.0, id_peer.1);
+                Ok(NetworkRemove::new(
                     file_path.clone(),
                     id_peer.0,
                     id_peer.1,
@@ -137,9 +137,9 @@ impl SharQueue {
         }
     }
 
-    /// Applies a remote `AddOperation`. If the parent doesn't exist yet, backlogs
+    /// Applies a remote `NetworkAdd`. If the parent doesn't exist yet, backlogs
     /// `op` instead. On success, replays any backlogged add/remove waiting on it.
-    pub fn add_network_operation(&mut self, op: AddOperation) {
+    pub fn add_network_operation(&mut self, op: NetworkAdd) {
         let crdt = op.crdt;
         let row = op.row;
         let file_path = op.file_path.clone();
@@ -199,11 +199,11 @@ impl SharQueue {
         };
     }
 
-    /// Applies a remote `RemoveOperation`. If the target doesn't exist yet,
+    /// Applies a remote `NetworkRemove`. If the target doesn't exist yet,
     /// backlogs `op` instead; drained once the matching add arrives (see
     /// [`Self::add_network_operation`]). A retry of an already-removed target
     /// is a no-op.
-    pub fn remove_network_operation(&mut self, op: RemoveOperation) {
+    pub fn remove_network_operation(&mut self, op: NetworkRemove) {
         let op_clone = op.clone();
         let file_path = op_clone.file_path;
         let id = op_clone.id;

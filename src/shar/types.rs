@@ -1,31 +1,23 @@
-//! The CRDT node types and the `Operation` types used to move edits between the
-//! IDE, the local tree, and (eventually) the network.
+//! CRDT node types and the `Operation` types used to move edits around.
 
 // GLOBAL VARIABLES
 
 use std::path::PathBuf;
 
-/// The mutable part of a CRDT node: its character, where it's parented, and
-/// whether it's been tombstoned. Split out from [`CRDT`] because this is the
-/// piece that actually changes over a node's lifetime (`deleted` flips from
-/// `false` to `true` on removal; everything else is fixed at creation).
+/// A node's value, parent pointer, and deleted flag.
 #[derive(Copy, PartialEq, Clone, Debug)]
 pub struct CrdtRelation {
     /// The character this node represents.
     pub value: char,
-    /// The id half of this node's parent's `(id, peer)` identity. `(0, 0)` is
-    /// reserved for the root sentinel — "nothing before this in the document."
+    /// Parent's id. `(0, 0)` is the root sentinel.
     pub parent_id: u32,
-    /// The peer half of this node's parent's `(id, peer)` identity.
+    /// Parent's peer.
     pub parent_peer: u8,
-    /// Whether this node has been tombstoned (removed). Tombstones stay in
-    /// `SharFile::characters` forever right now — there's no garbage collection
-    /// yet — they're just dropped out of the line projection.
+    /// Whether this node has been tombstoned.
     pub deleted: bool,
 }
 
 impl CrdtRelation {
-    /// Builds a fresh, live (`deleted: false`) relation for a newly-created node.
     pub fn new(value: char, parent_id: u32, parent_peer: u8) -> Self {
         CrdtRelation {
             value: value,
@@ -36,16 +28,13 @@ impl CrdtRelation {
     }
 }
 
-/// A [`CrdtRelation`] together with the identity (`id`, `peer`) of the node it
-/// describes. `(id, peer)` — not a bare id — is what's actually globally unique
-/// across replicas, since two peers' local id counters can collide.
+/// A [`CrdtRelation`] plus the `(id, peer)` identity of the node it describes.
 #[derive(Copy, PartialEq, Clone, Debug)]
 pub struct CRDT {
-    /// This node's id, unique only when paired with `peer`.
+    /// Unique when paired with `peer`.
     pub id: u32,
     /// The peer/replica that created this node.
     pub peer: u8,
-    /// This node's value and parent-pointer state.
     pub relation: CrdtRelation,
 }
 
@@ -59,22 +48,17 @@ impl CRDT {
     }
 }
 
-/// A single local (IDE-originated) or remote character insertion, as handed
-/// back by [`crate::shar::core::queue::SharQueue::add_ide_crdt`] for outbound
-/// transmission, or handed to
-/// [`crate::shar::core::queue::SharQueue::add_network_operation`] on receipt.
+/// A single character insertion, local or remote. See
+/// [`crate::shar::core::queue::SharQueue`].
 #[derive(Clone)]
 pub struct AddOperation {
-    /// Which file in the shar this insertion belongs to.
+    /// The file this insertion belongs to.
     pub file_path: PathBuf,
-    /// The character being inserted, already carrying its resolved parent.
+    /// The character being inserted, with its resolved parent.
     pub crdt: CRDT,
-    /// The projection line this insertion targets (used as a ring-search hint,
-    /// not trusted as the final position — see `SharFile::find_crdt`).
+    /// Ring-search hint line, not a guaranteed final position.
     pub row: usize,
-    /// Whether this is a front-of-line insert (parent is a newline or the root
-    /// sentinel, neither of which live in the projection) rather than a normal
-    /// insert anchored on a real projected character.
+    /// Whether this is a front-of-line insert.
     pub start_line: bool,
 }
 
@@ -89,24 +73,17 @@ impl AddOperation {
     }
 }
 
-/// A single local or remote character removal, as handed back by
-/// [`crate::shar::core::queue::SharQueue::remove_ide_crdt`] for outbound
-/// transmission, or handed to
-/// [`crate::shar::core::queue::SharQueue::remove_network_operation`] on receipt.
-///
-/// Unlike [`AddOperation`], this carries just the target's `(id, peer)` rather
-/// than a full `CRDT` — a removal doesn't need a value or a parent, only an
-/// identity to tombstone.
+/// A single character removal, local or remote — just a target `(id, peer)`,
+/// no value or parent needed. See [`crate::shar::core::queue::SharQueue`].
 #[derive(Clone)]
 pub struct RemoveOperation {
-    /// Which file in the shar this removal belongs to.
+    /// The file this removal belongs to.
     pub file_path: PathBuf,
-    /// The id half of the target node's `(id, peer)` identity.
+    /// Target id.
     pub id: u32,
-    /// The peer half of the target node's `(id, peer)` identity.
+    /// Target peer.
     pub peer: u8,
-    /// The projection line this removal targets (used as a ring-search hint,
-    /// same as [`AddOperation::row`]).
+    /// Ring-search hint line, not a guaranteed final position.
     pub row: usize,
 }
 

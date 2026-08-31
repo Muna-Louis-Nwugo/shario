@@ -1,7 +1,4 @@
-//! A placeholder persistence layer. `SharBuffer` currently just appends raw
-//! bytes to a single hardcoded local file — it exists as a stand-in for
-//! whatever eventually carries operations across the network, not as a real
-//! save/load mechanism yet. See [`crate::shar::io::io_info::FILE_LOCATION`].
+//! Placeholder persistence layer — writes raw bytes to a single hardcoded file.
 
 use crate::shar::error::Error;
 use crate::shar::io::io_info;
@@ -10,16 +7,14 @@ use tokio::fs::File;
 // use tokio::io::{self, AsyncWriteExt, BufWriter};
 use tokio::io::{AsyncWriteExt, BufWriter};
 
-/// Wraps a single buffered file handle that operations get written to.
-/// Read-back isn't implemented yet (see [`FileWrite::read`]).
+/// A buffered file handle that operations get written to. No read-back yet.
 pub struct SharBuffer {
     write_buffer: BufWriter<File>,
     // read_buffer: BufReader<File>,
 }
 
 impl SharBuffer {
-    /// Opens (creating/truncating) the buffer's backing file at
-    /// [`io_info::FILE_LOCATION`] and wraps it for buffered writes.
+    /// Opens the buffer's backing file at [`io_info::FILE_LOCATION`].
     pub async fn new() -> Result<SharBuffer> {
         /* Creates a new write_buffer*/
         // TODO: WHEN THE TIME COMES, UPDATE THIS TO SOMEHOW TRANSMIT ACROSS A NETWORK
@@ -38,8 +33,7 @@ impl SharBuffer {
         }
     }
 
-    /// Writes a fixed 14-byte operation to the buffer and flushes immediately.
-    /// Errors are logged and swallowed rather than propagated.
+    /// Writes and flushes a 14-byte operation. Errors are logged, not propagated.
     pub async fn write_general(&mut self, operation: [u8; 14]) {
         println!("write_gen entered");
 
@@ -59,14 +53,11 @@ impl SharBuffer {
     }
 }
 
-/// A generic byte-oriented write/read interface, so buffer backends other than
-/// [`SharBuffer`] can eventually be swapped in behind the same API.
+/// Generic byte-oriented write/read interface for buffer backends.
 pub trait FileWrite {
-    /// Writes one fixed-size 14-byte operation.
     fn write(&mut self, operation: [u8; 14]) -> impl std::future::Future<Output = ()> + Send;
 
-    /// Reads back previously-written operations. Currently a stub — always
-    /// returns an empty `Vec`, nothing is actually read from disk yet.
+    /// Stub — always returns an empty `Vec`.
     fn read(self) -> Result<Vec<u8>>;
 }
 

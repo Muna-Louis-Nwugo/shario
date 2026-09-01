@@ -4,10 +4,10 @@
 
 use std::path::PathBuf;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// A node's value, parent pointer, and deleted flag.
-#[derive(Copy, PartialEq, Clone, Debug, Deserialize)]
+#[derive(Copy, PartialEq, Clone, Debug, Deserialize, Serialize)]
 pub struct CrdtRelation {
     /// The character this node represents.
     pub value: char,
@@ -31,7 +31,7 @@ impl CrdtRelation {
 }
 
 /// A [`CrdtRelation`] plus the `(id, peer)` identity of the node it describes.
-#[derive(Copy, PartialEq, Clone, Debug, Deserialize)]
+#[derive(Copy, PartialEq, Clone, Debug, Deserialize, Serialize)]
 pub struct CRDT {
     /// Unique when paired with `peer`.
     pub id: u32,
@@ -52,7 +52,7 @@ impl CRDT {
 
 /// A single character remote insertion. See
 /// [`crate::shar::core::queue::SharQueue`].
-#[derive(Clone, Deserialize, Debug)]
+#[derive(Clone, Deserialize, Debug, Serialize)]
 pub struct NetworkAdd {
     /// The file this insertion belongs to.
     pub file_path: PathBuf,
@@ -77,7 +77,7 @@ impl NetworkAdd {
 
 /// A single character remote removal — just a target `(id, peer)`,
 /// no value or parent needed. See [`crate::shar::core::queue::SharQueue`].
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct NetworkRemove {
     /// The file this removal belongs to.
     pub file_path: PathBuf,
@@ -102,7 +102,7 @@ impl NetworkRemove {
 
 /// A single character IDE insertion. See
 /// [`crate::shar::core::queue::SharQueue`].
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct IdeAdd {
     /// The file this addition belongs to
     pub file_path: PathBuf,
@@ -157,4 +157,13 @@ impl IdeRemove {
             is_whole_line: is_whole_line,
         }
     }
+}
+
+/// A Websocket connection message
+#[derive(Debug, Deserialize)]
+pub struct Connect {
+    /// Is this a local IDE connection? True -> Yes, False -> No (network connection)
+    pub local: bool,
+    // The path of the connection
+    pub path: PathBuf,
 }

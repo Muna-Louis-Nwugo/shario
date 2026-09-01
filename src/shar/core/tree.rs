@@ -17,7 +17,7 @@ fn is_line_break(c: char) -> bool {
 
 /// One file's CRDT state: an id-keyed map plus its derived line/column
 /// projection.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SharFile {
     /// Local path. Excluded from `PartialEq` (see below) — not CRDT state.
     file_path: PathBuf,
@@ -526,6 +526,7 @@ impl<'a> fmt::Display for SharFile {
 /// One directory in the shar, holding its files and recursively mirroring its
 /// subdirectories. Operations are routed to the right file by path (see
 /// [`Self::find_file`]).
+#[derive(Default, Debug)]
 pub struct SharDirectory {
     dir_name: PathBuf,
     sub_dir: Vec<SharDirectory>,
@@ -546,8 +547,12 @@ impl SharDirectory {
                 // file's CRDT tree
 
                 for entry in entries {
-                    let entry = entry?;
-                    let entry_type = entry.file_type()?;
+                    let entry = entry.map_err(|e| {
+                        Error::ReadFail(format!("Failed to read directory entry: \n {e} \n"))
+                    })?;
+                    let entry_type = entry.file_type().map_err(|e| {
+                        Error::ReadFail(format!("Failed to read entry type: \n {e} \n"))
+                    })?;
                     // if it's a directory, recursively create a new SharDir
                     if entry_type.is_dir() {
                         sub_dir_vector.push(Self::new(entry.path(), counter)?);

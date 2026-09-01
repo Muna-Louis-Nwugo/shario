@@ -1,7 +1,7 @@
 //! The crate's error type.
 
 /// All the ways a `shar` operation can fail.
-#[derive(thiserror::Error, Debug)]
+#[derive(thiserror::Error, Debug, serde::Serialize)]
 pub enum Error {
     /// Catch-all for failures without their own variant yet.
     // remove this generic as the problem progresses
@@ -11,10 +11,6 @@ pub enum Error {
     /// Reading a file or directory failed.
     #[error("ReadFail: {0}")]
     ReadFail(String),
-
-    /// Wraps a `std::io::Error`.
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
 
     /// Initialization failed.
     #[error("InitFail: {0}")]
@@ -37,8 +33,6 @@ impl PartialEq for Error {
             (Self::InitFail(a), Self::InitFail(b)) => a == b,
             (Self::UnknownOrigin(a), Self::UnknownOrigin(b)) => a == b,
             (Self::OutOfBounds(a), Self::OutOfBounds(b)) => a == b,
-            // Compare the underlying error kind for the std::io::Error payload
-            (Self::Io(a), Self::Io(b)) => a.kind() == b.kind(),
             _ => false,
         }
     }

@@ -1,6 +1,6 @@
 use crate::shar::core::queue::SharQueue;
 use crate::shar::prelude::{CRDT, CrdtRelation};
-use crate::types::{AddOperation, RemoveOperation};
+use crate::types::{IdeAdd, IdeRemove, NetworkAdd, NetworkRemove};
 use std::cell::RefCell;
 use std::path::PathBuf;
 
@@ -55,12 +55,12 @@ fn teardown(dir_name: &str) {
 }
 
 #[test]
-fn add_ide_crdt_returns_the_operation_it_applied() {
+fn add_ide_operation_returns_the_operation_it_applied() {
     let (mut queue, file_path) = setup("scratch_queue_add_ide", "ab");
 
     // 'a' is at (0,0), 'b' at (0,1) -- insert after 'b'
     let op = queue
-        .add_ide_crdt(&file_path, 0, 1, 'c', false)
+        .add_ide_operation(IdeAdd::new(file_path.clone(), 0, 1, 'c', false))
         .expect("failed to add via the ide path");
 
     assert_eq!(op.file_path, file_path);
@@ -72,7 +72,7 @@ fn add_ide_crdt_returns_the_operation_it_applied() {
     // insert anchored there should resolve its parent to exactly this op's crdt --
     // that's only possible if 'c' really landed where it was supposed to
     let follow_up = queue
-        .add_ide_crdt(&file_path, 0, 2, 'd', false)
+        .add_ide_operation(IdeAdd::new(file_path.clone(), 0, 2, 'd', false))
         .expect("failed to add follow-up character");
     assert_eq!(
         (
@@ -87,19 +87,19 @@ fn add_ide_crdt_returns_the_operation_it_applied() {
 }
 
 #[test]
-fn remove_ide_crdt_guards_the_sentinel() {
+fn remove_ide_operation_guards_the_sentinel() {
     let (mut queue, file_path) = setup("scratch_queue_remove_sentinel", "a");
 
     // (0, 0) is 'a', not the sentinel -- a normal, valid removal
     let op = queue
-        .remove_ide_crdt(&file_path, 0, 0, false)
+        .remove_ide_operation(IdeRemove::new(file_path.clone(), 0, 0, false))
         .expect("failed to remove a real character");
     assert_eq!(op.id, 1);
 
     // asking to remove "the whole line" for line 0 resolves to the sentinel (0, 0)
     // as its anchor -- this must be rejected, not passed through to remove_crdt
     // (which would underflow trying to merge line 0 into line "-1")
-    let result = queue.remove_ide_crdt(&file_path, 0, 0, true);
+    let result = queue.remove_ide_operation(IdeRemove::new(file_path.clone(), 0, 0, true));
     assert!(
         result.is_err(),
         "removing the sentinel line-anchor should error, not panic"
@@ -114,7 +114,7 @@ fn add_network_operation_applies_and_fires_callback() {
 
     // id 1 is 'a', the only real character -- parent it on the sentinel (0, 0)
     let relation = CrdtRelation::new('z', 0, 0);
-    let op = AddOperation::new(file_path, CRDT::new(2, 1, relation), 0, true);
+    let op = NetworkAdd::new(file_path, CRDT::new(2, 1, relation), 0, true);
     queue.add_network_operation(op);
 
     assert_eq!(
@@ -135,7 +135,7 @@ fn out_of_order_add_resolves_once_parent_arrives() {
 
     // the child arrives first, parented on id 999 which doesn't exist yet
     let child_relation = CrdtRelation::new('x', 999, 0);
-    let child = AddOperation::new(file_path.clone(), CRDT::new(1000, 1, child_relation), 0, false);
+    let child = NetworkAdd::new(file_path.clone(), CRDT::new(1000, 1, child_relation), 0, false);
     queue.add_network_operation(child);
     assert_eq!(
         add_calls().len(),
@@ -145,7 +145,7 @@ fn out_of_order_add_resolves_once_parent_arrives() {
 
     // now the parent arrives, itself parented on the sentinel
     let parent_relation = CrdtRelation::new('p', 0, 0);
-    let parent = AddOperation::new(file_path, CRDT::new(999, 0, parent_relation), 0, true);
+    let parent = NetworkAdd::new(file_path, CRDT::new(999, 0, parent_relation), 0, true);
     queue.add_network_operation(parent);
 
     assert_eq!(
@@ -167,13 +167,13 @@ fn three_backlogged_children_of_same_parent_all_resolve() {
 
     for (id, c) in [(1000, 'x'), (1001, 'y'), (1002, 'z')] {
         let relation = CrdtRelation::new(c, 999, 0);
-        let op = AddOperation::new(file_path.clone(), CRDT::new(id, 1, relation), 0, false);
+        let op = NetworkAdd::new(file_path.clone(), CRDT::new(id, 1, relation), 0, false);
         queue.add_network_operation(op);
     }
     assert_eq!(add_calls().len(), 0, "all three should still be backlogged");
 
     let parent_relation = CrdtRelation::new('p', 0, 0);
-    let parent = AddOperation::new(file_path, CRDT::new(999, 0, parent_relation), 0, true);
+    let parent = NetworkAdd::new(file_path, CRDT::new(999, 0, parent_relation), 0, true);
     queue.add_network_operation(parent);
 
     assert_eq!(
@@ -191,9 +191,9 @@ fn chained_dependency_resolves_transitively() {
 
     // A depends on B (id 998), B depends on the not-yet-arrived id 999
     let relation_b = CrdtRelation::new('b', 999, 0);
-    let op_b = AddOperation::new(file_path.clone(), CRDT::new(998, 1, relation_b), 0, false);
+    let op_b = NetworkAdd::new(file_path.clone(), CRDT::new(998, 1, relation_b), 0, false);
     let relation_a = CrdtRelation::new('a', 998, 1);
-    let op_a = AddOperation::new(file_path.clone(), CRDT::new(1000, 2, relation_a), 0, false);
+    let op_a = NetworkAdd::new(file_path.clone(), CRDT::new(1000, 2, relation_a), 0, false);
 
     // deliver the dependent before its own dependency, in both cases
     queue.add_network_operation(op_a);
@@ -201,7 +201,7 @@ fn chained_dependency_resolves_transitively() {
     assert_eq!(add_calls().len(), 0, "both should still be backlogged");
 
     let parent_relation = CrdtRelation::new('p', 0, 0);
-    let parent = AddOperation::new(file_path, CRDT::new(999, 0, parent_relation), 0, true);
+    let parent = NetworkAdd::new(file_path, CRDT::new(999, 0, parent_relation), 0, true);
     queue.add_network_operation(parent);
 
     assert_eq!(
@@ -217,7 +217,7 @@ fn chained_dependency_resolves_transitively() {
 fn remove_network_operation_applies_and_fires_callback() {
     let (mut queue, file_path) = setup("scratch_queue_remove_network", "ab");
 
-    let op = RemoveOperation::new(file_path, 1, 0, 0);
+    let op = NetworkRemove::new(file_path, 1, 0, 0);
     queue.remove_network_operation(op);
 
     assert_eq!(
@@ -237,7 +237,7 @@ fn remove_arriving_before_its_target_backlogs_then_resolves() {
     let (mut queue, file_path) = setup("scratch_queue_remove_before_add", "a");
 
     // a remove arrives for id 999, which doesn't exist in the tree yet
-    let pending_remove = RemoveOperation::new(file_path.clone(), 999, 0, 0);
+    let pending_remove = NetworkRemove::new(file_path.clone(), 999, 0, 0);
     queue.remove_network_operation(pending_remove);
     assert_eq!(
         remove_calls().len(),
@@ -247,7 +247,7 @@ fn remove_arriving_before_its_target_backlogs_then_resolves() {
 
     // now id 999 itself arrives, parented on the sentinel
     let relation = CrdtRelation::new('z', 0, 0);
-    let op = AddOperation::new(file_path, CRDT::new(999, 0, relation), 0, true);
+    let op = NetworkAdd::new(file_path, CRDT::new(999, 0, relation), 0, true);
     queue.add_network_operation(op);
 
     assert_eq!(add_calls().len(), 1, "the add itself should have applied");
@@ -272,7 +272,7 @@ fn remove_backlog_uses_its_own_index_not_the_add_backlogs_leftover() {
     // one unrelated, still-unresolved add sitting in add_backlog, so its loop's `i`
     // ends up at 1 (not 0) after failing to match this call's incoming id
     let unrelated_relation = CrdtRelation::new('u', 12345, 0);
-    let unrelated = AddOperation::new(
+    let unrelated = NetworkAdd::new(
         file_path.clone(),
         CRDT::new(9000, 1, unrelated_relation),
         0,
@@ -282,14 +282,14 @@ fn remove_backlog_uses_its_own_index_not_the_add_backlogs_leftover() {
 
     // one pending remove for id 999, sitting at index 0 (the only valid index) of
     // remove_backlog
-    let pending_remove = RemoveOperation::new(file_path.clone(), 999, 0, 0);
+    let pending_remove = NetworkRemove::new(file_path.clone(), 999, 0, 0);
     queue.remove_network_operation(pending_remove);
 
     // id 999 now arrives -- the add-backlog loop runs first (its one unrelated entry
     // doesn't match, so i ends at 1), then the remove-backlog loop must remove its
     // own match at j == 0, not at the leftover i == 1
     let relation = CrdtRelation::new('z', 0, 0);
-    let op = AddOperation::new(file_path, CRDT::new(999, 0, relation), 0, true);
+    let op = NetworkAdd::new(file_path, CRDT::new(999, 0, relation), 0, true);
     queue.add_network_operation(op);
 
     assert_eq!(add_calls().len(), 1, "the id-999 add itself should have applied");

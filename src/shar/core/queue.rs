@@ -8,6 +8,7 @@ use crate::types::{NetworkAdd, NetworkRemove};
 use std::path::PathBuf;
 
 /// Owns the tree for one shar session and mediates every read/write to it.
+#[derive(Debug, Default)]
 pub struct SharQueue {
     /// Remote adds waiting on a parent that hasn't arrived yet.
     add_backlog: Vec<NetworkAdd>,
@@ -19,13 +20,17 @@ pub struct SharQueue {
     /// Shared across every file in the directory.
     counter: u32,
     /// Called with `(row, col)` when an add is applied.
-    add_callback: fn(usize, usize),
+    pub add_callback: Option<fn(usize, usize)>,
     /// Called with `(row, col, was_line_merge)` when a remove is applied.
-    remove_callback: fn(usize, usize, bool),
+    pub remove_callback: Option<fn(usize, usize, bool)>,
 }
 
 impl SharQueue {
-    /// Loads the shar rooted at `dir_path`.
+    /// Loads the shar rooted at `dir_path`, storing `add_callback`/
+    /// `remove_callback` so they're set. A `SharQueue` built any other way
+    /// (e.g. `SharQueue::default()`) leaves them `None`, and calling
+    /// [`Self::add_network_operation`]/[`Self::remove_network_operation`] on
+    /// one will panic.
     pub fn new(
         dir_path: PathBuf,
         this_peer_id: PeerIdSize,
@@ -41,8 +46,8 @@ impl SharQueue {
             peer: this_peer_id,
             counter: counter,
             tree: tree,
-            add_callback: add_callback,
-            remove_callback: remove_callback,
+            add_callback: Some(add_callback),
+            remove_callback: Some(remove_callback),
         };
 
         Ok(queue)
@@ -51,7 +56,7 @@ impl SharQueue {
     /// Applies a locally-typed character and returns the `NetworkAdd` to
     /// send to peers. `start_line` resolves the parent via the line's
     /// start-of-line anchor instead of `(parent_row, parent_col)`.
-    pub fn add_ide_crdt(&mut self, op: IdeAdd) -> Result<NetworkAdd> {
+    pub fn add_ide_operation(&mut self, op: IdeAdd) -> Result<NetworkAdd> {
         let op_clone = op.clone();
         let file_path = op_clone.file_path;
         let parent_row = op_clone.parent_row;
@@ -91,7 +96,7 @@ impl SharQueue {
     /// Applies a locally-triggered removal and returns the `NetworkRemove` to
     /// send to peers. `is_whole_line` removes `row`'s line-start anchor
     /// instead of `(row, col)`. Rejects the root sentinel as a target.
-    pub fn remove_ide_crdt(&mut self, op: IdeRemove) -> Result<NetworkRemove> {
+    pub fn remove_ide_operation(&mut self, op: IdeRemove) -> Result<NetworkRemove> {
         let op_clone = op.clone();
 
         let file_path = op_clone.file_path;
@@ -139,6 +144,9 @@ impl SharQueue {
 
     /// Applies a remote `NetworkAdd`. If the parent doesn't exist yet, backlogs
     /// `op` instead. On success, replays any backlogged add/remove waiting on it.
+    ///
+    /// Panics if `add_callback` is `None` — only possible if this `SharQueue`
+    /// wasn't built via [`Self::new`].
     pub fn add_network_operation(&mut self, op: NetworkAdd) {
         let crdt = op.crdt;
         let row = op.row;
@@ -151,7 +159,7 @@ impl SharQueue {
         match pos {
             Ok(pos) => {
                 if let Some(position) = pos {
-                    (self.add_callback)(position.0, position.1);
+                    (self.add_callback.unwrap())(position.0, position.1);
 
                     // traverse the add_backlog to see if we have any inserts depending on this
                     let mut i = 0;
@@ -203,6 +211,9 @@ impl SharQueue {
     /// backlogs `op` instead; drained once the matching add arrives (see
     /// [`Self::add_network_operation`]). A retry of an already-removed target
     /// is a no-op.
+    ///
+    /// Panics if `remove_callback` is `None` — only possible if this
+    /// `SharQueue` wasn't built via [`Self::new`].
     pub fn remove_network_operation(&mut self, op: NetworkRemove) {
         let op_clone = op.clone();
         let file_path = op_clone.file_path;
@@ -215,7 +226,7 @@ impl SharQueue {
         match removed {
             Ok(pos) => {
                 if let Some(val) = pos {
-                    (self.remove_callback)(val.0, val.1, val.2);
+                    (self.remove_callback.unwrap())(val.0, val.1, val.2);
                 } else {
                     // if the remove returns none, the value has already been removed so do nothing
                     return;

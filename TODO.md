@@ -26,3 +26,4 @@
 - [ ] **Dead code** (`src/shar/core/tree.rs:171-176`) — the post-loop `if parent_index.is_none()` block is unreachable; also drops a `must_use` Result.
 - [x] **`SharDirectory::add_crdt` stub** (`src/shar/core/tree.rs:280`) — returns `Ok(())` without routing to a file by `file_path`.
 - [ ] **`cargo fix` pass** — clear the 32 warnings so real ones stop hiding.
+- [ ] **README is outdated** — needs a pass to match current state of the project.

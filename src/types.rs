@@ -159,11 +159,24 @@ impl IdeRemove {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum IdeOp {
+    ADD (IdeAdd),
+    REMOVE (IdeRemove),
+}
+
+
+#[derive(Debug, Clone)]
+pub enum NetworkOp {
+    ADD (NetworkAdd),
+    REMOVE (NetworkRemove), 
+}
+
 /// A Websocket connection message
 #[derive(Debug, Deserialize)]
 pub struct Connect {
     /// Is this a local IDE connection? True -> Yes, False -> No (network connection)
     pub local: bool,
-    // The path of the connection
+    /// The path of the connection
     pub path: PathBuf,
 }

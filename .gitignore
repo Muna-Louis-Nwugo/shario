@@ -28,4 +28,7 @@ target
 # scratch fixtures created/removed by tests
 /test_material/
 
+# runtime debug logs (see main.rs tracing setup)
+shar*.log
+
 

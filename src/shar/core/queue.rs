@@ -63,7 +63,7 @@ impl SharQueue {
     /// send to peers. `start_line` resolves the parent via the line's
     /// start-of-line anchor instead of `(paren:willt_row, parent_col)`.
     pub fn add_ide_operation(&mut self, op: IdeAdd) -> Result<()> {
-        tracing::debug!(?op, "add_ide_operation");
+        tracing::debug!(?op, "add_ide_operation called");
         let op_clone = op.clone();
         let file_path = op_clone.file_path;
         let parent_row = op_clone.parent_row;
@@ -94,11 +94,16 @@ impl SharQueue {
                     match add {
                         Ok(add) => {
                             if let Some(pos) = add {
+                                tracing::debug!(
+                                    row = pos.0,
+                                    col = pos.1,
+                                    "add_ide_operation resolved position, clearing dependants"
+                                );
                                 self.clear_ide_backlog(pos.0, pos.1);
                                 (self.ide_add_callback.unwrap())(network_op);
                                 Ok(())
                             } else {
-                                // This has probably already been added
+                                tracing::debug!("add_ide_operation was a no-op, likely already added");
                                 Ok(())
                             }
                         }
@@ -108,6 +113,11 @@ impl SharQueue {
                         )))),
                     }
                 } else {
+                    tracing::debug!(
+                        parent_row,
+                        parent_col,
+                        "add_ide_operation backlogged, parent not found yet"
+                    );
                     if let Some(backlogged) = self.ide_backlog.get_mut(&(parent_row, parent_col)) {
                         backlogged.push(IdeOp::ADD(op));
                     } else {
@@ -128,7 +138,7 @@ impl SharQueue {
     /// send to peers. `is_whole_line` removes `row`'s line-start anchor
     /// instead of `(row, col)`. Rejects the root sentinel as a target.
     pub fn remove_ide_operation(&mut self, op: IdeRemove) -> Result<()> {
-        tracing::debug!(?op, "remove_ide_operation");
+        tracing::debug!(?op, "remove_ide_operation called");
         let op_clone = op.clone();
 
         let file_path = op_clone.file_path;
@@ -165,7 +175,11 @@ impl SharQueue {
                     }
 
                     Err(_e) => {
-                        println!("remove gets backlogged: item existed but remove failed");
+                        tracing::debug!(
+                            row,
+                            col,
+                            "remove_ide_operation backlogged, target existed but the remove itself failed"
+                        );
                         if let Some(backlogged) = self.ide_backlog.get_mut(&(row, col)) {
                             backlogged.push(IdeOp::REMOVE(op));
                         } else {
@@ -179,7 +193,7 @@ impl SharQueue {
             // If None, this element doesn't currently exist in the shar.
             // In this case, add it to the backlog
             None => {
-                println!("remove gets backlogged: item didn't exist");
+                tracing::debug!(row, col, "remove_ide_operation backlogged, target doesn't exist yet");
                 if let Some(backlogged) = self.ide_backlog.get_mut(&(row, col)) {
                     backlogged.push(IdeOp::REMOVE(op));
                 } else {
@@ -196,7 +210,7 @@ impl SharQueue {
     /// Panics if `network_add_callback` is `None` — only possible if this `SharQueue`
     /// wasn't built via [`Self::new`].
     pub fn add_network_operation(&mut self, op: NetworkAdd) {
-        tracing::debug!(?op, "add_network_operation");
+        tracing::debug!(?op, "add_network_operation called");
         let crdt = op.crdt;
         let row = op.row;
         let file_path = op.file_path.clone();
@@ -211,12 +225,13 @@ impl SharQueue {
                     tracing::debug!(
                         row = position.0,
                         col = position.1,
-                        "add_network_operation applied"
+                        "add_network_operation resolved position, clearing dependants"
                     );
                     (self.network_add_callback.unwrap())(position.0, position.1);
 
                     self.clear_network_backlog(crdt.id, crdt.peer);
                 } else {
+                    tracing::debug!("add_network_operation was a no-op, likely already added");
                     return;
                 }
             }
@@ -246,7 +261,7 @@ impl SharQueue {
     /// Panics if `network_remove_callback` is `None` — only possible if this
     /// `SharQueue` wasn't built via [`Self::new`].
     pub fn remove_network_operation(&mut self, op: NetworkRemove) {
-        tracing::debug!(?op, "remove_network_operation");
+        tracing::debug!(?op, "remove_network_operation called");
         let op_clone = op.clone();
         let file_path = op_clone.file_path;
         let id = op_clone.id;
@@ -262,7 +277,7 @@ impl SharQueue {
                         row = val.0,
                         col = val.1,
                         is_line = val.2,
-                        "remove_network_operation applied"
+                        "remove_network_operation resolved target"
                     );
                     (self.network_remove_callback.unwrap())(val.0, val.1, val.2);
                 } else {

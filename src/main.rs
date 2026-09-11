@@ -183,13 +183,13 @@ async fn on_connect(socket: SocketRef) {
         // extracts from serde_json Value type containing event's arguments into the extract type
         // Data
         async |socket: SocketRef, Data::<IdeAdd>(data), queue: State<QueueWrap>| {
-            tracing::debug!(socket_id = %socket.id, ?data, "ide-add received");
+            tracing::debug!(socket_id = %socket.id, ?data, "ide-add");
             let add_attempt = queue.add_ide_operation(data).await;
 
             match add_attempt {
                 // TODO: Move all of this stuff into the callbacks
                 Ok(packet) => {
-                    tracing::debug!(socket_id = %socket.id, ?packet, "ide-add succeeded, broadcasting network-add");
+                    tracing::debug!(socket_id = %socket.id, ?packet, "ide-add applied, broadcasting network-add");
                     let _ = socket.within("network").emit("network-add", &packet).await;
                 }
 
@@ -204,12 +204,12 @@ async fn on_connect(socket: SocketRef) {
     socket.on(
         "remove",
         async |socket: SocketRef, Data::<IdeRemove>(data), queue: State<QueueWrap>| {
-            tracing::debug!(socket_id = %socket.id, ?data, "remove received");
+            tracing::debug!(socket_id = %socket.id, ?data, "remove");
             let remove_attempt = queue.remove_ide_operation(data).await;
 
             match remove_attempt {
                 Ok(packet) => {
-                    tracing::debug!(socket_id = %socket.id, ?packet, "remove succeeded, broadcasting network-remove");
+                    tracing::debug!(socket_id = %socket.id, ?packet, "remove applied, broadcasting network-remove");
                     let _ = socket
                         .within("network")
                         .emit("network-remove", &packet)
@@ -226,17 +226,17 @@ async fn on_connect(socket: SocketRef) {
 }
 
 fn network_add_callback(row: usize, col: usize) {
-    tracing::debug!(row, col, "add applied");
+    tracing::debug!(row, col, "network_add_callback reached");
 }
 
 fn network_remove_callback(row: usize, col: usize, is_line: bool) {
-    tracing::debug!(row, col, is_line, "remove applied");
+    tracing::debug!(row, col, is_line, "network_remove_callback reached");
 }
 
 fn ide_remove_callback(op: NetworkRemove) {
-    tracing::debug!(?op, "remove applied");
+    tracing::debug!(?op, "ide_remove_callback reached");
 }
 
 fn ide_add_callback(op: NetworkAdd) {
-    tracing::debug!(?op, "add applied");
+    tracing::debug!(?op, "ide_add_callback reached");
 }

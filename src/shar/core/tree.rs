@@ -27,6 +27,9 @@ pub struct SharFile {
     /// Derived `line -> column -> (id, peer)` view. Tombstones are dropped from
     /// here immediately, though they remain in `characters`.
     projection: Vec<Vec<(IdSize, PeerIdSize)>>,
+    /// Per line, the `(id, peer)` anchoring that line's start (a newline, or
+    /// the sentinel for line 0). Kept in step with `projection`'s indices.
+    line_start_ids: Vec<(IdSize, PeerIdSize)>,
 }
 
 // file_path is local placement, not CRDT state, so it's excluded — two replicas of the same
@@ -50,6 +53,7 @@ impl SharFile {
                     file_path: file_path,
                     characters: HashMap::new(),
                     projection: Vec::new(),
+                    line_start_ids: Vec::new(),
                 };
 
                 // it's okay to ignore the Error that could occur here because we're performing the
@@ -74,10 +78,11 @@ impl SharFile {
         // the shar specification states that peer 0 is reserved for the char itself to add to the
         // tree as necessary
         self.projection.push(Vec::new());
-        let _ = self.projection.get_mut(0).unwrap().push((0, 0));
         self.characters
             .insert((0, 0), CrdtRelation::new(char::from(0), 0, 0));
+        self.line_start_ids.push((0, 0));
 
+        let file_path = self.file_path.clone();
         let mut line = 0;
         let mut start_of_line;
         let mut prev: char = char::from(0);
@@ -104,29 +109,14 @@ impl SharFile {
     }
 
     /// Splits a projection line in two right after `coordinates`.
-    fn add_line_to_projection(
-        &mut self,
-        coordinates: (usize, usize),
-        id: IdSize,
-        peer: PeerIdSize,
-    ) {
+    fn add_line_to_projection(&mut self, coordinates: (usize, usize)) {
         if self.projection[coordinates.0].is_empty() {
             self.projection.insert(coordinates.0 + 1, Vec::new());
-            let _ = self
-                .projection
-                .get_mut(coordinates.0 + 1)
-                .unwrap()
-                .push((id, peer));
             return;
         }
 
         let new_line = self.projection[coordinates.0].split_off(coordinates.1 + 1);
         self.projection.insert(coordinates.0 + 1, new_line);
-        let _ = self
-            .projection
-            .get_mut(coordinates.0 + 1)
-            .unwrap()
-            .push((id, peer));
     }
 
     /// Looks up the `(id, peer)` at `(line, column)`. `None` if out of bounds.

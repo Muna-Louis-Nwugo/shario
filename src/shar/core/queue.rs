@@ -73,12 +73,7 @@ impl SharQueue {
 
         // find the parent id
 
-        let parent_id_peer;
-        if start_line {
-            parent_id_peer = self.tree.get_line_id_peer(&file_path, parent_row);
-        } else {
-            parent_id_peer = self.tree.get_id_peer(&file_path, (parent_row, parent_col));
-        }
+        let parent_id_peer = self.tree.get_id_peer(&file_path, (parent_row, parent_col));
 
         match parent_id_peer {
             Ok(parent) => {
@@ -89,7 +84,7 @@ impl SharQueue {
                     let network_op =
                         NetworkAdd::new(file_path.clone(), crdt.clone(), parent_row, start_line);
 
-                    let add = self.tree.add_crdt(&file_path, parent_row, crdt, start_line);
+                    let add = self.tree.add_crdt(&file_path, parent_row, crdt);
 
                     match add {
                         Ok(add) => {
@@ -146,13 +141,7 @@ impl SharQueue {
         let col = op_clone.col;
         let is_whole_line = op_clone.is_whole_line;
         // find the id/peer of the crdt
-        let id_peer;
-
-        if is_whole_line {
-            id_peer = self.tree.get_line_id_peer(&file_path, row)?;
-        } else {
-            id_peer = self.tree.get_id_peer(&file_path, (row, col))?;
-        }
+        let id_peer = self.tree.get_id_peer(&file_path, (row, col))?;
 
         match id_peer {
             Some(id_peer) => {
@@ -161,7 +150,9 @@ impl SharQueue {
                     return Err(Error::OutOfBounds(String::from("Can't remove sentinel")));
                 }
 
-                let remove = self.tree.remove_crdt(&file_path, row, id_peer.0, id_peer.1);
+                let remove = self
+                    .tree
+                    .remove_crdt(&file_path, row, id_peer.0, id_peer.1, is_whole_line);
 
                 match remove {
                     Ok(_remove) => {
@@ -170,6 +161,7 @@ impl SharQueue {
                             id_peer.0,
                             id_peer.1,
                             row,
+                            is_whole_line,
                         ));
                         Ok(())
                     }
@@ -214,10 +206,9 @@ impl SharQueue {
         let crdt = op.crdt;
         let row = op.row;
         let file_path = op.file_path.clone();
-        let start_line = op.start_line;
 
         // add crdt
-        let pos = self.tree.add_crdt(&file_path, row, crdt, start_line);
+        let pos = self.tree.add_crdt(&file_path, row, crdt);
 
         match pos {
             Ok(pos) => {
@@ -267,8 +258,11 @@ impl SharQueue {
         let id = op_clone.id;
         let peer = op_clone.peer;
         let row = op_clone.row;
+        let is_whole_line = op_clone.is_whole_line;
 
-        let removed = self.tree.remove_crdt(&file_path, row, id, peer);
+        let removed = self
+            .tree
+            .remove_crdt(&file_path, row, id, peer, is_whole_line);
 
         match removed {
             Ok(pos) => {

@@ -39,13 +39,7 @@ struct QueueWrap {
 }
 
 impl QueueWrap {
-    pub async fn new(
-        &mut self,
-        dir_path: PathBuf,
-        this_peer_id: PeerIdSize,
-        add_callback: fn(usize, usize),
-        remove_callback: fn(usize, usize, bool),
-    ) -> Result<(), Error> {
+    pub async fn new(&mut self, dir_path: PathBuf, this_peer_id: PeerIdSize) -> Result<(), Error> {
         let real_queue = SharQueue::new(
             dir_path,
             this_peer_id,
@@ -166,7 +160,7 @@ async fn on_connect(socket: SocketRef) {
                 // creates a new "queue"
                 // right now, this is just a stub
                 if let Err(e) = queue
-                    .new(data.path, 1, network_add_callback, network_remove_callback)
+                    .new(data.path, 1)
                     .await
                 {
                     tracing::error!(socket_id = %socket.id, error = %e, "failed to initialize queue");

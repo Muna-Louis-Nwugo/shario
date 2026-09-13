@@ -26,41 +26,44 @@ fn test_add_crdt() {
     let last_id = content.chars().count() as u32;
 
     // append a character after the very last character — hint line 0 on purpose, so
-    // the ring search has to walk all the way down to line 7 to find it. "FINAL_LINE_END"
-    // is 14 characters (indices 0-13), so '!' lands at index 14
+    // the ring search has to walk all the way down to line 7 to find it. Every line's
+    // index 0 is now its own anchor (root sentinel for line 0, the creating newline
+    // for every other line), so real content starts at index 1 — "FINAL_LINE_END" is
+    // 14 characters occupying indices 1-14, so '!' lands at index 15
     let extra = CRDT::new(last_id + 1, 0, CrdtRelation::new('!', last_id, 0));
     let position = dir
-        .add_crdt(&file_path, 0, extra, false)
+        .add_crdt(&file_path, 0, extra)
         .expect("failed to append after the last character");
     assert_eq!(
         position,
-        Some((7, 14)),
+        Some((7, 15)),
         "'!' should land right after the last character"
     );
 
-    // split a new line right after that character — a line-break CRDT reports the
-    // position of the character it split right after, not a position of its own
+    // split a new line right after that character — a line-break CRDT now reports its
+    // own landing position (the new line it creates, at that line's index 0 — it
+    // becomes the new line's anchor), not the position of the character it split after
     let newline = CRDT::new(last_id + 2, 0, CrdtRelation::new('\n', last_id + 1, 0));
     let position = dir
-        .add_crdt(&file_path, 0, newline, false)
+        .add_crdt(&file_path, 0, newline)
         .expect("failed to add a line at the end");
     assert_eq!(
         position,
-        Some((7, 14)),
-        "the split should report where it split"
+        Some((8, 0)),
+        "the newline should report its own position: the new line's anchor"
     );
 
-    // add the first character of the freshly-created line (line 8) — its parent is
-    // the newline, which is never in the projection, so this needs start_line: true.
-    // The line was empty, so this hits the empty-line fast path at column 0
+    // add the first real character of the freshly-created line (line 8) — its parent
+    // is the newline, which now sits at (8, 0) as line 8's own anchor: a completely
+    // ordinary lookup, no special-casing needed. It lands right after the anchor
     let last_char = CRDT::new(last_id + 3, 0, CrdtRelation::new('X', last_id + 2, 0));
     let position = dir
-        .add_crdt(&file_path, 8, last_char, true)
+        .add_crdt(&file_path, 8, last_char)
         .expect("failed to add character to the new final line");
     assert_eq!(
         position,
-        Some((8, 0)),
-        "'X' should be the sole character on the new line"
+        Some((8, 1)),
+        "'X' should land right after line 8's anchor"
     );
 
     std::fs::remove_file(&file_path).expect("failed to delete scratch file");
@@ -69,12 +72,9 @@ fn test_add_crdt() {
 
 #[test]
 fn test_convergence() {
-    let path_a =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scratch_convergence_a.txt");
-    let path_b =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scratch_convergence_b.txt");
-    let path_c =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scratch_convergence_c.txt");
+    let path_a = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scratch_convergence_a.txt");
+    let path_b = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scratch_convergence_b.txt");
+    let path_c = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scratch_convergence_c.txt");
 
     // same messy multi-line/mixed-script content, loaded independently into three
     // separate replicas
@@ -107,21 +107,21 @@ fn test_convergence() {
     // a sign these three ids/peers weren't as distinct as intended)
     assert!(
         replica_a
-            .add_crdt(0, op_x.clone(), false)
+            .add_crdt(0, op_x.clone())
             .expect("a: failed to apply x")
             .is_some(),
         "a: x should be a real insert, not a no-op"
     );
     assert!(
         replica_a
-            .add_crdt(0, op_y.clone(), false)
+            .add_crdt(0, op_y.clone())
             .expect("a: failed to apply y")
             .is_some(),
         "a: y should be a real insert, not a no-op"
     );
     assert!(
         replica_a
-            .add_crdt(0, op_z.clone(), false)
+            .add_crdt(0, op_z.clone())
             .expect("a: failed to apply z")
             .is_some(),
         "a: z should be a real insert, not a no-op"
@@ -130,21 +130,21 @@ fn test_convergence() {
     // ...replica_b applies them in the reverse order...
     assert!(
         replica_b
-            .add_crdt(0, op_z.clone(), false)
+            .add_crdt(0, op_z.clone())
             .expect("b: failed to apply z")
             .is_some(),
         "b: z should be a real insert, not a no-op"
     );
     assert!(
         replica_b
-            .add_crdt(0, op_y.clone(), false)
+            .add_crdt(0, op_y.clone())
             .expect("b: failed to apply y")
             .is_some(),
         "b: y should be a real insert, not a no-op"
     );
     assert!(
         replica_b
-            .add_crdt(0, op_x.clone(), false)
+            .add_crdt(0, op_x.clone())
             .expect("b: failed to apply x")
             .is_some(),
         "b: x should be a real insert, not a no-op"
@@ -153,21 +153,21 @@ fn test_convergence() {
     // ...and replica_c applies them in yet another order
     assert!(
         replica_c
-            .add_crdt(0, op_y.clone(), false)
+            .add_crdt(0, op_y.clone())
             .expect("c: failed to apply y")
             .is_some(),
         "c: y should be a real insert, not a no-op"
     );
     assert!(
         replica_c
-            .add_crdt(0, op_x.clone(), false)
+            .add_crdt(0, op_x.clone())
             .expect("c: failed to apply x")
             .is_some(),
         "c: x should be a real insert, not a no-op"
     );
     assert!(
         replica_c
-            .add_crdt(0, op_z.clone(), false)
+            .add_crdt(0, op_z.clone())
             .expect("c: failed to apply z")
             .is_some(),
         "c: z should be a real insert, not a no-op"
@@ -189,8 +189,7 @@ fn test_convergence() {
 
 #[test]
 fn test_get_id_peer() {
-    let file_path =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scratch_get_id_peer.txt");
+    let file_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scratch_get_id_peer.txt");
     // four lines of 9 characters each (except the last), no trailing newline
     let content = "abc123!@#\ndef456$%^\nghi789&*(\nLAST";
     std::fs::write(&file_path, content).expect("failed to write scratch file");
@@ -198,73 +197,81 @@ fn test_get_id_peer() {
     let mut counter = 0;
     let mut file = SharFile::new(file_path.clone(), &mut counter).expect("failed to load file");
 
+    // index 0 of every line is now its own anchor (the root sentinel for line 0, the
+    // creating newline for every other line), so real content starts at index 1 —
     // spot-check known positions across every line, not just the first
     assert_eq!(
         file.get_id_peer((0, 0)),
+        Some((0, 0)),
+        "(0, 0) is the root sentinel, not 'a'"
+    );
+    assert_eq!(
+        file.get_id_peer((0, 1)),
         Some((1, 0)),
-        "'a' should be at (0, 0)"
+        "'a' should be at (0, 1)"
     );
-    assert_eq!(
-        file.get_id_peer((0, 8)),
-        Some((9, 0)),
-        "'#' should be at (0, 8)"
-    );
-    assert_eq!(
-        file.get_id_peer((1, 0)),
-        Some((11, 0)),
-        "'d' should be at (1, 0)"
-    );
-    assert_eq!(
-        file.get_id_peer((1, 8)),
-        Some((19, 0)),
-        "'^' should be at (1, 8)"
-    );
-    assert_eq!(
-        file.get_id_peer((2, 0)),
-        Some((21, 0)),
-        "'g' should be at (2, 0)"
-    );
-    assert_eq!(
-        file.get_id_peer((2, 8)),
-        Some((29, 0)),
-        "'(' should be at (2, 8)"
-    );
-    assert_eq!(
-        file.get_id_peer((3, 0)),
-        Some((31, 0)),
-        "'L' should be at (3, 0)"
-    );
-    assert_eq!(
-        file.get_id_peer((3, 3)),
-        Some((34, 0)),
-        "'T' should be at (3, 3)"
-    );
-
-    // out of bounds in either dimension is None, not a panic
     assert_eq!(
         file.get_id_peer((0, 9)),
-        None,
-        "line 0 only has 9 characters"
+        Some((9, 0)),
+        "'#' should be at (0, 9)"
+    );
+    assert_eq!(
+        file.get_id_peer((1, 1)),
+        Some((11, 0)),
+        "'d' should be at (1, 1)"
+    );
+    assert_eq!(
+        file.get_id_peer((1, 9)),
+        Some((19, 0)),
+        "'^' should be at (1, 9)"
+    );
+    assert_eq!(
+        file.get_id_peer((2, 1)),
+        Some((21, 0)),
+        "'g' should be at (2, 1)"
+    );
+    assert_eq!(
+        file.get_id_peer((2, 9)),
+        Some((29, 0)),
+        "'(' should be at (2, 9)"
+    );
+    assert_eq!(
+        file.get_id_peer((3, 1)),
+        Some((31, 0)),
+        "'L' should be at (3, 1)"
     );
     assert_eq!(
         file.get_id_peer((3, 4)),
+        Some((34, 0)),
+        "'T' should be at (3, 4)"
+    );
+
+    // out of bounds in either dimension is None, not a panic — every line now has one
+    // extra slot for its own anchor, so the boundary shifts out by one too
+    assert_eq!(
+        file.get_id_peer((0, 10)),
         None,
-        "line 3 only has 4 characters"
+        "line 0 only has 9 real characters plus its anchor"
+    );
+    assert_eq!(
+        file.get_id_peer((3, 5)),
+        None,
+        "line 3 only has 4 real characters plus its anchor"
     );
     assert_eq!(file.get_id_peer((10, 0)), None, "there are only 4 lines");
 
     // the id/peer this returns has to be usable as a real parent reference: look up
     // the last character of the last line, use it as a parent, and confirm the new
     // character lands right after it
-    let (parent_id, parent_peer) = file.get_id_peer((3, 3)).expect("'T' should still be there");
+    let (parent_id, parent_peer) = file.get_id_peer((3, 4)).expect("'T' should still be there");
     let c = CRDT::new(35, 0, CrdtRelation::new('!', parent_id, parent_peer));
     let position = file
-        .add_crdt(3, c, false)
+        .add_crdt(3, c)
         .expect("failed to add character using looked-up parent");
-    assert_eq!(position, Some((3, 4)), "'!' should land right after 'T'");
+    assert_eq!(position, Some((3, 5)), "'!' should land right after 'T'");
 
     assert_eq!(
-        file.get_id_peer((3, 4)),
+        file.get_id_peer((3, 5)),
         Some((35, 0)),
         "'!' should have landed right after 'T'"
     );
@@ -274,10 +281,9 @@ fn test_get_id_peer() {
 
 #[test]
 fn test_front_of_line_insert_ordering() {
-    let file_path =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scratch_front_of_line.txt");
+    let file_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scratch_front_of_line.txt");
     // messy first line ending in a real newline (id == char count), whose child
-    // line (line 1) starts out empty
+    // line (line 1) starts out empty (apart from its own anchor: the newline itself)
     let content = "some prefix line !@# \u{1f600} 123\n";
     std::fs::write(&file_path, content).expect("failed to write scratch file");
 
@@ -288,56 +294,63 @@ fn test_front_of_line_insert_ordering() {
     let new_line = 1;
 
     // four front-of-line inserts, applied in a deliberately scrambled (non-sorted)
-    // order, all parented on the same real newline — final order must still be
-    // strictly descending by id regardless of application order, which means each
-    // one has to correctly walk past however many are already there. Ids are chosen
-    // comfortably above the file's own real character count so none of them collide
-    // with (and get silently no-op'd against) real content already loaded
+    // order, all parented directly on the real newline that anchors line 1 — no
+    // special-casing needed, it's an ordinary parent lookup now. Final order must
+    // still be strictly descending by id regardless of application order, which
+    // means each one has to correctly walk past however many are already there.
+    // Ids are chosen comfortably above the file's own real character count so none
+    // of them collide with (and get silently no-op'd against) real content already
+    // loaded
     let a = CRDT::new(1050, 0, CrdtRelation::new('a', newline_id, 0));
     let position = file
-        .add_crdt(new_line, a, true)
+        .add_crdt(new_line, a)
         .expect("failed to add front-of-line character 'a'");
     assert_eq!(
         position,
-        Some((1, 0)),
-        "'a' is the only thing on the line so far"
+        Some((1, 1)),
+        "'a' is the only real thing on the line so far, right after the anchor"
     );
 
     let b = CRDT::new(1010, 0, CrdtRelation::new('b', newline_id, 0));
     let position = file
-        .add_crdt(new_line, b, true)
+        .add_crdt(new_line, b)
         .expect("failed to add front-of-line character 'b'");
     assert_eq!(
         position,
-        Some((1, 1)),
+        Some((1, 2)),
         "'b' has a smaller id, so it lands after 'a'"
     );
 
     let c = CRDT::new(1999, 0, CrdtRelation::new('c', newline_id, 0));
     let position = file
-        .add_crdt(new_line, c, true)
+        .add_crdt(new_line, c)
         .expect("failed to add front-of-line character 'c'");
     assert_eq!(
         position,
-        Some((1, 0)),
-        "'c' has the largest id, so it jumps to the front"
+        Some((1, 1)),
+        "'c' has the largest id, so it jumps right after the anchor"
     );
 
     let d = CRDT::new(1500, 0, CrdtRelation::new('d', newline_id, 0));
     let position = file
-        .add_crdt(new_line, d, true)
+        .add_crdt(new_line, d)
         .expect("failed to add front-of-line character 'd'");
     assert_eq!(
         position,
-        Some((1, 1)),
+        Some((1, 2)),
         "'d' lands right after 'c', before 'a'"
     );
 
-    // final order must be strictly descending: 1999, 1500, 1050, 1010
-    assert_eq!(file.get_id_peer((new_line, 0)), Some((1999, 0)));
-    assert_eq!(file.get_id_peer((new_line, 1)), Some((1500, 0)));
-    assert_eq!(file.get_id_peer((new_line, 2)), Some((1050, 0)));
-    assert_eq!(file.get_id_peer((new_line, 3)), Some((1010, 0)));
+    // final order must be: anchor, then strictly descending by id: 1999, 1500, 1050, 1010
+    assert_eq!(
+        file.get_id_peer((new_line, 0)),
+        Some((newline_id, 0)),
+        "index 0 is still the line's own anchor"
+    );
+    assert_eq!(file.get_id_peer((new_line, 1)), Some((1999, 0)));
+    assert_eq!(file.get_id_peer((new_line, 2)), Some((1500, 0)));
+    assert_eq!(file.get_id_peer((new_line, 3)), Some((1050, 0)));
+    assert_eq!(file.get_id_peer((new_line, 4)), Some((1010, 0)));
 
     std::fs::remove_file(&file_path).expect("failed to delete scratch file");
 }
@@ -360,17 +373,18 @@ fn test_remove_crdt() {
 
     // ids 10, 11, 12 are three real, consecutive characters (each one's parent is
     // the one before it, per add_file's sequential chain) — tombstone all three to
-    // build an actual multi-level tombstone chain, not just a single removed node
-    dir.remove_crdt(&file_path, 0, 10, 0)
+    // build an actual multi-level tombstone chain, not just a single removed node.
+    // None of them are line anchors, so is_line is false throughout
+    dir.remove_crdt(&file_path, 0, 10, 0, false)
         .expect("failed to remove first character in the chain");
-    dir.remove_crdt(&file_path, 0, 11, 0)
+    dir.remove_crdt(&file_path, 0, 11, 0, false)
         .expect("failed to remove second character in the chain");
-    dir.remove_crdt(&file_path, 0, 12, 0)
+    dir.remove_crdt(&file_path, 0, 12, 0, false)
         .expect("failed to remove third character in the chain");
 
     // retrying an already-removed one is a no-op, not an error
     assert_eq!(
-        dir.remove_crdt(&file_path, 0, 11, 0)
+        dir.remove_crdt(&file_path, 0, 11, 0, false)
             .expect("failed to no-op a repeated removal"),
         None,
         "removing an already-deleted crdt should report None, not a fresh position"
@@ -378,20 +392,22 @@ fn test_remove_crdt() {
 
     // removing something that was never added at all is an error
     assert!(
-        dir.remove_crdt(&file_path, 0, 999_999, 0).is_err(),
+        dir.remove_crdt(&file_path, 0, 999_999, 0, false).is_err(),
         "removing a nonexistent crdt should fail, not succeed"
     );
 
     // add a character parented on the deepest tombstone (id 12) — resolving this has
     // to climb all three tombstoned levels back to the nearest live ancestor (id 9),
-    // exercising find_tombstone's recursion through the full directory-routed path
+    // exercising find_tombstone's recursion through the full directory-routed path.
+    // id 9 sits at index 9 now (index 0 is the line's anchor), so the new character
+    // lands right after it at index 10
     let new_char = CRDT::new(999, 0, CrdtRelation::new('!', 12, 0));
     let position = dir
-        .add_crdt(&file_path, 0, new_char, false)
+        .add_crdt(&file_path, 0, new_char)
         .expect("failed to add a character parented on a 3-deep tombstone chain");
     assert_eq!(
         position,
-        Some((0, 9)),
+        Some((0, 10)),
         "should land right after id 9, the nearest live ancestor left after the chain"
     );
 
@@ -416,8 +432,9 @@ fn nested_directories_are_routed_correctly() {
     let mut dir =
         SharDirectory::new(root.clone(), &mut counter).expect("failed to load directory");
 
+    // (0, 0) is the root sentinel now; 'a' is the first real character, at (0, 1)
     assert_eq!(
-        dir.get_id_peer(&file_path, (0, 0)).expect("routing failed"),
+        dir.get_id_peer(&file_path, (0, 1)).expect("routing failed"),
         Some((1, 0)),
         "'a' one directory level below the root should still be found"
     );
@@ -473,7 +490,7 @@ fn missing_parent_errors_instead_of_panicking() {
 
     let orphan = CRDT::new(999, 1, CrdtRelation::new('x', 12345, 0));
     assert!(
-        file.add_crdt(0, orphan, false).is_err(),
+        file.add_crdt(0, orphan).is_err(),
         "a crdt whose parent doesn't exist yet should error, not panic"
     );
 
@@ -485,34 +502,46 @@ fn removing_a_newline_merges_lines_and_keeps_anchors_aligned() {
     // regression test: line_start_ids used to be indexed independently of
     // projection (push on insert, no corresponding shift/removal on delete),
     // so it silently desynced from the actual line numbers as soon as more than
-    // one line existed. This exercises both directions: mid-document insertion
-    // and removal-triggered line merging.
+    // one line existed. Now every line's own anchor lives directly in `projection`
+    // (index 0), so removing it has to merge the line the same way any other
+    // removal-driven line merge would, without leaving the tombstoned anchor
+    // behind as a stale entry.
     let file_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scratch_line_merge.txt");
     std::fs::write(&file_path, "a\nb\nc").expect("failed to write scratch file");
 
     let mut counter = 0;
     let mut file = SharFile::new(file_path.clone(), &mut counter).expect("failed to load file");
 
-    // ids: a=1, \n=2, b=3, \n=4, c=5
-    // remove the first newline (id 2): "a" and "b" should merge onto line 0
-    file.remove_crdt(0, 2, 0)
+    // ids: a=1, \n=2, b=3, \n=4, c=5. \n(2) is line 1's own anchor; \n(4) is line 2's.
+    // remove the first newline (id 2, at (1, 0)): "b" should merge onto line 0, right
+    // after "a"
+    file.remove_crdt(1, 2, 0, true)
         .expect("failed to remove first newline");
     assert_eq!(
-        file.get_id_peer((0, 1)),
+        file.get_id_peer((0, 2)),
         Some((3, 0)),
         "'b' should have merged onto line 0 right after 'a'"
     );
     assert_eq!(
-        file.get_line_id_peer(1),
-        Some((4, 0)),
-        "line 1's anchor should now be the second newline, shifted down from index 2"
+        file.get_id_peer((0, 1)),
+        Some((1, 0)),
+        "'a' should be undisturbed at (0, 1)"
     );
 
-    // remove the second newline (id 4): the merged line and "c" should merge too
-    file.remove_crdt(0, 4, 0)
+    // the tombstoned newline itself should not linger as a stale entry in the
+    // merged line — projection is documented to drop tombstones immediately
+    assert_eq!(
+        file.get_id_peer((0, 3)),
+        None,
+        "line 0 should have exactly the anchor, 'a', and 'b' — no leftover tombstone"
+    );
+
+    // remove the second newline (id 4, now at (1, 0) after the previous merge shifted
+    // line 2 down to line 1): the merged line and "c" should merge too
+    file.remove_crdt(1, 4, 0, true)
         .expect("failed to remove second newline");
     assert_eq!(
-        file.get_id_peer((0, 2)),
+        file.get_id_peer((0, 3)),
         Some((5, 0)),
         "'c' should have merged onto the single remaining line"
     );

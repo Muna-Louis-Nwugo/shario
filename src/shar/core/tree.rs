@@ -27,9 +27,6 @@ pub struct SharFile {
     /// Derived `line -> column -> (id, peer)` view. Tombstones are dropped from
     /// here immediately, though they remain in `characters`.
     projection: Vec<Vec<(IdSize, PeerIdSize)>>,
-    /// Per line, the `(id, peer)` anchoring that line's start (a newline, or
-    /// the sentinel for line 0). Kept in step with `projection`'s indices.
-    line_start_ids: Vec<(IdSize, PeerIdSize)>,
 }
 
 // file_path is local placement, not CRDT state, so it's excluded — two replicas of the same
@@ -53,7 +50,6 @@ impl SharFile {
                     file_path: file_path,
                     characters: HashMap::new(),
                     projection: Vec::new(),
-                    line_start_ids: Vec::new(),
                 };
 
                 // it's okay to ignore the Error that could occur here because we're performing the
@@ -78,14 +74,11 @@ impl SharFile {
         // the shar specification states that peer 0 is reserved for the char itself to add to the
         // tree as necessary
         self.projection.push(Vec::new());
+        let _ = self.projection.get_mut(0).unwrap().push((0, 0));
         self.characters
             .insert((0, 0), CrdtRelation::new(char::from(0), 0, 0));
-        self.line_start_ids.push((0, 0));
 
-        let file_path = self.file_path.clone();
         let mut line = 0;
-        let mut start_of_line;
-        let mut prev: char = char::from(0);
         let mut prev_id = 0;
 
         for (_i, c) in file_contents.char_indices() {
@@ -95,27 +88,34 @@ impl SharFile {
             let crdt = CRDT::new(id, 0, CrdtRelation::new(c, prev_id, 0));
             prev_id = id;
 
-            start_of_line = is_line_break(prev);
-
             // safe to ignore: file_path always matches self's own path during initial load
-            let _ = self.add_crdt(line, crdt, start_of_line);
+            let _ = self.add_crdt(line, crdt);
 
             if is_line_break(c) {
                 line += 1;
             }
-
-            prev = c;
         }
     }
 
     /// Splits a projection line in two right after `coordinates`.
-    fn add_line_to_projection(&mut self, coordinates: (usize, usize)) {
+    fn add_line_to_projection(
+        &mut self,
+        coordinates: (usize, usize),
+        id: IdSize,
+        peer: PeerIdSize,
+    ) {
         if self.projection[coordinates.0].is_empty() {
             self.projection.insert(coordinates.0 + 1, Vec::new());
+            let _ = self
+                .projection
+                .get_mut(coordinates.0 + 1)
+                .unwrap()
+                .push((id, peer));
             return;
         }
 
-        let new_line = self.projection[coordinates.0].split_off(coordinates.1 + 1);
+        let mut new_line = self.projection[coordinates.0].split_off(coordinates.1 + 1);
+        new_line.insert(0, (id, peer));
         self.projection.insert(coordinates.0 + 1, new_line);
     }
 
@@ -131,19 +131,6 @@ impl SharFile {
             }
         } else {
             None
-        }
-    }
-
-    /// Looks up `line_number`'s start-of-line anchor. `None` if out of bounds.
-    pub fn get_line_id_peer(&self, line_number: usize) -> Option<(IdSize, PeerIdSize)> {
-        let id_peer = self.line_start_ids.get(line_number);
-
-        match id_peer {
-            Some(id_peer) => {
-                return Some(id_peer.clone());
-            }
-
-            None => None,
         }
     }
 
@@ -317,53 +304,33 @@ impl SharFile {
     ///
     /// `Ok(None)`: duplicate, already applied. `Ok(Some(pos))`: inserted.
     /// `Err`: parent doesn't exist on this replica yet.
-    pub fn add_crdt(
-        &mut self,
-        line_num: usize,
-        crdt: CRDT,
-        start_line: bool,
-    ) -> Result<Option<(usize, usize)>> {
+    pub fn add_crdt(&mut self, line_num: usize, crdt: CRDT) -> Result<Option<(usize, usize)>> {
         let id = crdt.id;
         let peer = crdt.peer;
         let relation = &crdt.relation;
         let parent_exists: bool;
+
+        if let Some(par) = self
+            .characters
+            .get(&(relation.parent_id, relation.parent_peer))
+        {
+            parent_exists = !par.deleted;
+        } else {
+            return Err(Error::Generic(String::from("Parent does not exist")));
+        }
 
         // a retry/resend of an op we've already applied is a no-op, not a duplicate insert
         if self.characters.contains_key(&(id, peer)) {
             return Ok(None);
         }
 
-        if !self.characters.is_empty() {
-            if let Some(par) = self
-                .characters
-                .get(&(relation.parent_id, relation.parent_peer))
-            {
-                parent_exists = !par.deleted;
-            } else {
-                return Err(Error::Generic(String::from("Parent does not exist")));
-            }
-        } else {
-            parent_exists = true;
-        }
-
         // the first character of a line has no real projected predecessor to look up (its
         // parent may be a newline, which is deliberately never stored in the projection) — the
         // line itself is already known, so there's nothing to search for
-        let parent = if start_line {
-            if !self
-                .line_start_ids
-                .contains(&(relation.parent_id, relation.parent_peer))
-            {
-                self.line_start_ids
-                    .insert(line_num, (relation.parent_id, relation.parent_peer));
-            }
-            Ok((line_num, 0))
+        let parent = if parent_exists {
+            self.find_crdt(line_num, relation.parent_id, relation.parent_peer)
         } else {
-            if parent_exists {
-                self.find_crdt(line_num, relation.parent_id, relation.parent_peer)
-            } else {
-                self.find_tombstone(line_num, relation.parent_id, relation.parent_peer)
-            }
+            self.find_tombstone(line_num, relation.parent_id, relation.parent_peer)
         };
 
         match parent {
@@ -375,38 +342,35 @@ impl SharFile {
 
                 // if this is a new line, split the projection here instead of inserting a character
                 if is_line_break(relation.value) {
-                    self.add_line_to_projection(coordinates);
-                    return Ok(Some(coordinates));
+                    self.add_line_to_projection(coordinates, id, peer);
+                    return Ok(Some((coordinates.0 + 1, 0)));
                 }
 
                 // an empty line has no siblings to compare against, so the new character is simply
                 // the only thing on it
-                if self.projection[coordinates.0].is_empty() {
-                    self.projection[coordinates.0].push(insertion_value);
-                    return Ok(Some((coordinates.0, 0)));
-                }
+                // TODO: delete this if it turns out not to cause any problems
+                // if self.projection[coordinates.0].is_empty() {
+                //     self.projection[coordinates.0].push(insertion_value);
+                //     return Ok(Some((coordinates.0, 0)));
+                // }
 
-                let start: usize;
+                let start = coordinates.1;
+                let line: usize = coordinates.0;
                 let offset: usize;
                 let range: usize;
-                if start_line {
-                    start = 0;
+
+                if !parent_exists {
                     offset = 0;
-                    range = self.projection[coordinates.0].len() + 1;
-                } else if !parent_exists {
-                    start = coordinates.1;
-                    offset = 0;
-                    range = self.projection[coordinates.0].len() + 1;
+                    range = self.projection[line].len() + 1;
                 } else {
-                    start = coordinates.1;
                     offset = 1;
-                    range = self.projection[coordinates.0].len();
+                    range = self.projection[line].len();
                 }
 
                 // figure out where it goes in the projection
                 for j in start..range {
                     // if the next element in the line exists
-                    if let Some(next_element) = self.projection[coordinates.0].get(j + offset) {
+                    if let Some(next_element) = self.projection[line].get(j + offset) {
                         let next_info = (
                             self.characters[next_element].parent_id,
                             self.characters[next_element].parent_peer,
@@ -414,13 +378,13 @@ impl SharFile {
 
                         if next_info != (relation.parent_id, relation.parent_peer) {
                             // if the next element doesn't have the same parent, just insert this one next
-                            self.projection[coordinates.0].insert(j + offset, insertion_value);
-                            return Ok(Some((coordinates.0, j + offset)));
+                            self.projection[line].insert(j + offset, insertion_value);
+                            return Ok(Some((line, j + offset)));
                         } else if next_element.0 < id {
                             // if the next element has the same parent but a smaller id, put this one
                             // first
-                            self.projection[coordinates.0].insert(j + offset, insertion_value);
-                            return Ok(Some((coordinates.0, j + offset)));
+                            self.projection[line].insert(j + offset, insertion_value);
+                            return Ok(Some((line, j + offset)));
                         } else if next_element.0 == id {
                             // if the ids are equal, move on to the peer ids
                             //
@@ -435,8 +399,8 @@ impl SharFile {
                             // forbid) equal to this peer id, then assume who made this joined
                             // first and insert insert the CRDT
                             else {
-                                self.projection[coordinates.0].insert(j + offset, insertion_value);
-                                return Ok(Some((coordinates.0, j + offset)));
+                                self.projection[line].insert(j + offset, insertion_value);
+                                return Ok(Some((line, j + offset)));
                             }
                         }
                     } else {
@@ -471,6 +435,7 @@ impl SharFile {
         line_num: usize,
         id: IdSize,
         peer: PeerIdSize,
+        is_line: bool,
     ) -> Result<Option<(usize, usize, bool)>> {
         // remove the crdt from the HashMap
         let crdt_relation = self.characters.get_mut(&(id, peer));
@@ -487,20 +452,31 @@ impl SharFile {
         }
 
         // check if this is one of the line
-        if let Some(line) = self.line_start_ids.iter().position(|&x| x == (id, peer)) {
-            self.line_start_ids.remove(line);
-
+        if is_line {
             // fix the projection
-            let mut to_be_deleted = self.projection[line].clone();
+            let to_be_deleted = self.projection.get(line_num);
 
-            // append deleted line to line above it
-            // REMEMBER at the IDE level, you are unable to remove the sentinel character, so
-            // this won't break in that case since that case never arrives
-            self.projection[line - 1].append(&mut to_be_deleted);
+            match to_be_deleted {
+                Some(old_line) => {
+                    let mut old_line_copy = old_line.clone();
 
-            // delete the line
-            self.projection.remove(line);
-            return Ok(Some((line, 0, true)));
+                    // remove the tombstoned line from the projection
+                    old_line_copy.remove(0);
+
+                    // append deleted line to line above it
+                    // REMEMBER at the IDE level, you are unable to remove the sentinel character, so
+                    // this won't break in that case since that case never arrives
+                    self.projection[line_num - 1].append(&mut old_line_copy);
+
+                    // delete the line
+                    self.projection.remove(line_num);
+                    return Ok(Some((line_num, 0, true)));
+                }
+
+                None => {
+                    return Err(Error::Generic(format!("line does not exist to be deleted")));
+                }
+            }
         }
 
         // find the value in the projection and delete it
@@ -581,13 +557,12 @@ impl SharDirectory {
         file_path: &PathBuf,
         line_num: usize,
         crdt: CRDT,
-        start_line: bool,
     ) -> Result<Option<(usize, usize)>> {
         let path = file_path.iter();
 
         // recursively search for the end of the path
         if let Some(file) = self.find_file(path) {
-            return file.add_crdt(line_num, crdt, start_line);
+            return file.add_crdt(line_num, crdt);
         } else {
             Err(Error::Generic(String::from("File not found")))
         }
@@ -600,12 +575,13 @@ impl SharDirectory {
         line_num: usize,
         id: IdSize,
         peer: PeerIdSize,
+        is_line: bool,
     ) -> Result<Option<(usize, usize, bool)>> {
         let path = file_path.iter();
 
         // recursively search for the end of the path
         if let Some(file) = self.find_file(path) {
-            return file.remove_crdt(line_num, id, peer);
+            return file.remove_crdt(line_num, id, peer, is_line);
         } else {
             Err(Error::Generic(String::from("File not found")))
         }
@@ -621,21 +597,6 @@ impl SharDirectory {
 
         if let Some(file) = self.find_file(path) {
             return Ok(file.get_id_peer(pos));
-        } else {
-            Err(Error::Generic(String::from("File not found")))
-        }
-    }
-
-    /// Routes to `file_path`'s [`SharFile`] and delegates.
-    pub fn get_line_id_peer(
-        &mut self,
-        file_path: &PathBuf,
-        line_num: usize,
-    ) -> Result<Option<(IdSize, PeerIdSize)>> {
-        let path = file_path.iter();
-
-        if let Some(file) = self.find_file(path) {
-            return Ok(file.get_line_id_peer(line_num));
         } else {
             Err(Error::Generic(String::from("File not found")))
         }

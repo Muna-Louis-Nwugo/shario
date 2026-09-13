@@ -87,15 +87,19 @@ pub struct NetworkRemove {
     pub peer: u8,
     /// Ring-search hint line, not a guaranteed final position.
     pub row: usize,
+    /// Whether the target is a line-start anchor (removing it merges the line
+    /// into the one above) rather than an ordinary character.
+    pub is_whole_line: bool,
 }
 
 impl NetworkRemove {
-    pub fn new(file_path: PathBuf, id: u32, peer: u8, row: usize) -> Self {
+    pub fn new(file_path: PathBuf, id: u32, peer: u8, row: usize, is_whole_line: bool) -> Self {
         NetworkRemove {
             file_path: file_path,
             id: id,
             peer: peer,
             row: row,
+            is_whole_line: is_whole_line,
         }
     }
 }

@@ -11,11 +11,15 @@ use std::path::PathBuf;
 thread_local! {
     static ADD_CALLS: RefCell<Vec<(usize, usize)>> = RefCell::new(Vec::new());
     static REMOVE_CALLS: RefCell<Vec<(usize, usize, bool)>> = RefCell::new(Vec::new());
+    static IDE_ADD_CALLS: RefCell<Vec<NetworkAdd>> = RefCell::new(Vec::new());
+    static IDE_REMOVE_CALLS: RefCell<Vec<NetworkRemove>> = RefCell::new(Vec::new());
 }
 
 fn reset_calls() {
     ADD_CALLS.with(|c| c.borrow_mut().clear());
     REMOVE_CALLS.with(|c| c.borrow_mut().clear());
+    IDE_ADD_CALLS.with(|c| c.borrow_mut().clear());
+    IDE_REMOVE_CALLS.with(|c| c.borrow_mut().clear());
 }
 
 fn record_add(row: usize, col: usize) {
@@ -26,12 +30,28 @@ fn record_remove(row: usize, col: usize, is_line_merge: bool) {
     REMOVE_CALLS.with(|c| c.borrow_mut().push((row, col, is_line_merge)));
 }
 
+fn record_ide_add(op: NetworkAdd) {
+    IDE_ADD_CALLS.with(|c| c.borrow_mut().push(op));
+}
+
+fn record_ide_remove(op: NetworkRemove) {
+    IDE_REMOVE_CALLS.with(|c| c.borrow_mut().push(op));
+}
+
 fn add_calls() -> Vec<(usize, usize)> {
     ADD_CALLS.with(|c| c.borrow().clone())
 }
 
 fn remove_calls() -> Vec<(usize, usize, bool)> {
     REMOVE_CALLS.with(|c| c.borrow().clone())
+}
+
+fn ide_add_calls() -> Vec<NetworkAdd> {
+    IDE_ADD_CALLS.with(|c| c.borrow().clone())
+}
+
+fn ide_remove_calls() -> Vec<NetworkRemove> {
+    IDE_REMOVE_CALLS.with(|c| c.borrow().clone())
 }
 
 /// Creates a fresh scratch directory containing a single file with the given content,
@@ -43,8 +63,15 @@ fn setup(dir_name: &str, content: &str) -> (SharQueue, PathBuf) {
     let file_path = dir_path.join("f.txt");
     std::fs::write(&file_path, content).expect("failed to write scratch file");
 
-    let queue = SharQueue::new(dir_path, 0, record_add, record_remove)
-        .expect("failed to load queue");
+    let queue = SharQueue::new(
+        dir_path,
+        0,
+        record_add,
+        record_remove,
+        record_ide_add,
+        record_ide_remove,
+    )
+    .expect("failed to load queue");
     (queue, file_path)
 }
 
@@ -55,32 +82,39 @@ fn teardown(dir_name: &str) {
 }
 
 #[test]
-fn add_ide_operation_returns_the_operation_it_applied() {
+fn add_ide_operation_applies_and_fires_callback() {
     let (mut queue, file_path) = setup("scratch_queue_add_ide", "ab");
 
-    // 'a' is at (0,0), 'b' at (0,1) -- insert after 'b'
-    let op = queue
-        .add_ide_operation(IdeAdd::new(file_path.clone(), 0, 1, 'c', false))
+    // index 0 of line 0 is now the root sentinel, not 'a' -- 'a' is at (0,1), 'b' at
+    // (0,2) -- insert after 'b'
+    queue
+        .add_ide_operation(IdeAdd::new(file_path.clone(), 0, 2, 'c', false))
         .expect("failed to add via the ide path");
 
+    let calls = ide_add_calls();
+    assert_eq!(calls.len(), 1, "ide_add_callback should have fired once");
+    let op = calls[0].clone();
     assert_eq!(op.file_path, file_path);
     assert_eq!(op.crdt.relation.value, 'c');
     assert_eq!(op.row, 0);
-    assert_eq!(op.start_line, false);
 
-    // applied synchronously: 'c' should now be sitting at (0, 2), so a follow-up
+    // applied synchronously: 'c' should now be sitting at (0, 3), so a follow-up
     // insert anchored there should resolve its parent to exactly this op's crdt --
     // that's only possible if 'c' really landed where it was supposed to
-    let follow_up = queue
-        .add_ide_operation(IdeAdd::new(file_path.clone(), 0, 2, 'd', false))
+    queue
+        .add_ide_operation(IdeAdd::new(file_path.clone(), 0, 3, 'd', false))
         .expect("failed to add follow-up character");
+
+    let calls = ide_add_calls();
+    assert_eq!(calls.len(), 2, "ide_add_callback should have fired twice");
+    let follow_up = calls[1].clone();
     assert_eq!(
         (
             follow_up.crdt.relation.parent_id,
             follow_up.crdt.relation.parent_peer
         ),
         (op.crdt.id, op.crdt.peer),
-        "'d' should have parented on 'c', proving 'c' really landed at (0,2)"
+        "'d' should have parented on 'c', proving 'c' really landed at (0,3)"
     );
 
     teardown("scratch_queue_add_ide");
@@ -90,11 +124,14 @@ fn add_ide_operation_returns_the_operation_it_applied() {
 fn remove_ide_operation_guards_the_sentinel() {
     let (mut queue, file_path) = setup("scratch_queue_remove_sentinel", "a");
 
-    // (0, 0) is 'a', not the sentinel -- a normal, valid removal
-    let op = queue
-        .remove_ide_operation(IdeRemove::new(file_path.clone(), 0, 0, false))
+    // (0, 1) is 'a' -- index 0 is the line's own anchor (the sentinel for line 0),
+    // not 'a' itself -- a normal, valid removal
+    queue
+        .remove_ide_operation(IdeRemove::new(file_path.clone(), 0, 1, false))
         .expect("failed to remove a real character");
-    assert_eq!(op.id, 1);
+    let calls = ide_remove_calls();
+    assert_eq!(calls.len(), 1, "ide_remove_callback should have fired");
+    assert_eq!(calls[0].id, 1);
 
     // asking to remove "the whole line" for line 0 resolves to the sentinel (0, 0)
     // as its anchor -- this must be rejected, not passed through to remove_crdt
@@ -217,12 +254,14 @@ fn chained_dependency_resolves_transitively() {
 fn remove_network_operation_applies_and_fires_callback() {
     let (mut queue, file_path) = setup("scratch_queue_remove_network", "ab");
 
-    let op = NetworkRemove::new(file_path, 1, 0, 0);
+    // id 1 is 'a', at (0, 1) now that index 0 is the line's anchor -- not a line
+    // anchor itself, so is_whole_line is false
+    let op = NetworkRemove::new(file_path, 1, 0, 0, false);
     queue.remove_network_operation(op);
 
     assert_eq!(
         remove_calls(),
-        vec![(0, 0, false)],
+        vec![(0, 1, false)],
         "removing 'a' should fire the callback with its position and merge-flag"
     );
 
@@ -237,7 +276,7 @@ fn remove_arriving_before_its_target_backlogs_then_resolves() {
     let (mut queue, file_path) = setup("scratch_queue_remove_before_add", "a");
 
     // a remove arrives for id 999, which doesn't exist in the tree yet
-    let pending_remove = NetworkRemove::new(file_path.clone(), 999, 0, 0);
+    let pending_remove = NetworkRemove::new(file_path.clone(), 999, 0, 0, false);
     queue.remove_network_operation(pending_remove);
     assert_eq!(
         remove_calls().len(),
@@ -282,7 +321,7 @@ fn remove_backlog_uses_its_own_index_not_the_add_backlogs_leftover() {
 
     // one pending remove for id 999, sitting at index 0 (the only valid index) of
     // remove_backlog
-    let pending_remove = NetworkRemove::new(file_path.clone(), 999, 0, 0);
+    let pending_remove = NetworkRemove::new(file_path.clone(), 999, 0, 0, false);
     queue.remove_network_operation(pending_remove);
 
     // id 999 now arrives -- the add-backlog loop runs first (its one unrelated entry

@@ -1,37 +1,61 @@
 use crate::shar::core::queue::SharQueue;
-use crate::shar::prelude::{CRDT, CrdtRelation};
-use crate::types::{IdeAdd, IdeRemove, NetworkAdd, NetworkRemove};
+use crate::shar::prelude::{CRDT, CrdtRelation, IdSize, PeerIdSize};
+use crate::types::{IdeAdd, IdeAddConfirmed, NetworkAdd, Remove};
 use std::cell::RefCell;
 use std::path::PathBuf;
 
-// SharQueue's callbacks are plain `fn` pointers (no closures, so no capturing a local
-// Vec directly) -- thread_local storage lets each #[test] (which cargo test runs on
-// its own thread) observe exactly which callbacks fired, without any locking and
-// without cross-test contamination even if the harness reuses a thread across tests.
+// SharQueue's callbacks are boxed closures with no captured state in these tests, so
+// there's nowhere to stash observed calls except somewhere outside the closure itself.
+// thread_local storage lets each #[tokio::test] (which cargo test still runs on its own
+// thread, same as any #[test]) observe exactly which callbacks fired, without any
+// locking and without cross-test contamination even if the harness reuses a thread.
 thread_local! {
     static ADD_CALLS: RefCell<Vec<(usize, usize)>> = RefCell::new(Vec::new());
-    static REMOVE_CALLS: RefCell<Vec<(usize, usize, bool)>> = RefCell::new(Vec::new());
+    static REMOVE_CALLS: RefCell<Vec<(usize, usize)>> = RefCell::new(Vec::new());
+    static IDE_ADD_CALLS: RefCell<Vec<(NetworkAdd, u32, IdSize, PeerIdSize)>> = RefCell::new(Vec::new());
+    static IDE_REMOVE_CALLS: RefCell<Vec<Remove>> = RefCell::new(Vec::new());
 }
 
 fn reset_calls() {
     ADD_CALLS.with(|c| c.borrow_mut().clear());
     REMOVE_CALLS.with(|c| c.borrow_mut().clear());
+    IDE_ADD_CALLS.with(|c| c.borrow_mut().clear());
+    IDE_REMOVE_CALLS.with(|c| c.borrow_mut().clear());
 }
 
-fn record_add(row: usize, col: usize) {
+async fn record_add(row: usize, col: usize) {
     ADD_CALLS.with(|c| c.borrow_mut().push((row, col)));
 }
 
-fn record_remove(row: usize, col: usize, is_line_merge: bool) {
-    REMOVE_CALLS.with(|c| c.borrow_mut().push((row, col, is_line_merge)));
+async fn record_remove(row: usize, col: usize) {
+    REMOVE_CALLS.with(|c| c.borrow_mut().push((row, col)));
+}
+
+async fn record_ide_add(op: NetworkAdd, confirmed: IdeAddConfirmed) {
+    IDE_ADD_CALLS.with(|c| {
+        c.borrow_mut()
+            .push((op, confirmed.tag, confirmed.id, confirmed.peer))
+    });
+}
+
+async fn record_ide_remove(op: Remove) {
+    IDE_REMOVE_CALLS.with(|c| c.borrow_mut().push(op));
 }
 
 fn add_calls() -> Vec<(usize, usize)> {
     ADD_CALLS.with(|c| c.borrow().clone())
 }
 
-fn remove_calls() -> Vec<(usize, usize, bool)> {
+fn remove_calls() -> Vec<(usize, usize)> {
     REMOVE_CALLS.with(|c| c.borrow().clone())
+}
+
+fn ide_add_calls() -> Vec<(NetworkAdd, u32, IdSize, PeerIdSize)> {
+    IDE_ADD_CALLS.with(|c| c.borrow().clone())
+}
+
+fn ide_remove_calls() -> Vec<Remove> {
+    IDE_REMOVE_CALLS.with(|c| c.borrow().clone())
 }
 
 /// Creates a fresh scratch directory containing a single file with the given content,
@@ -43,8 +67,15 @@ fn setup(dir_name: &str, content: &str) -> (SharQueue, PathBuf) {
     let file_path = dir_path.join("f.txt");
     std::fs::write(&file_path, content).expect("failed to write scratch file");
 
-    let queue = SharQueue::new(dir_path, 0, record_add, record_remove)
-        .expect("failed to load queue");
+    let queue = SharQueue::new(
+        dir_path,
+        0,
+        Box::new(|row, col| Box::pin(record_add(row, col))),
+        Box::new(|row, col| Box::pin(record_remove(row, col))),
+        Box::new(|op, confirmed| Box::pin(record_ide_add(op, confirmed))),
+        Box::new(|op| Box::pin(record_ide_remove(op))),
+    )
+    .expect("failed to load queue");
     (queue, file_path)
 }
 
@@ -54,68 +85,80 @@ fn teardown(dir_name: &str) {
     std::fs::remove_dir(&dir_path).expect("failed to delete scratch dir");
 }
 
-#[test]
-fn add_ide_operation_returns_the_operation_it_applied() {
+#[tokio::test]
+async fn add_ide_operation_applies_and_fires_callback() {
     let (mut queue, file_path) = setup("scratch_queue_add_ide", "ab");
 
-    // 'a' is at (0,0), 'b' at (0,1) -- insert after 'b'
-    let op = queue
-        .add_ide_operation(IdeAdd::new(file_path.clone(), 0, 1, 'c', false))
+    // index 0 of line 0 is now the root sentinel, not 'a' -- 'a' is at (0,1), 'b' at
+    // (0,2) -- insert after 'b'
+    queue
+        .add_ide_operation(IdeAdd::new(file_path.clone(), 0, 2, 'c', 42))
+        .await
         .expect("failed to add via the ide path");
 
+    let calls = ide_add_calls();
+    assert_eq!(calls.len(), 1, "ide_add_callback should have fired once");
+    let (op, tag, id, peer) = calls[0].clone();
     assert_eq!(op.file_path, file_path);
     assert_eq!(op.crdt.relation.value, 'c');
     assert_eq!(op.row, 0);
-    assert_eq!(op.start_line, false);
+    assert_eq!(tag, 42, "the confirmation should echo back the tag it was sent");
+    assert_eq!(
+        (id, peer),
+        (op.crdt.id, op.crdt.peer),
+        "the confirmation should carry the crdt's real (id, peer)"
+    );
 
-    // applied synchronously: 'c' should now be sitting at (0, 2), so a follow-up
+    // applied synchronously: 'c' should now be sitting at (0, 3), so a follow-up
     // insert anchored there should resolve its parent to exactly this op's crdt --
     // that's only possible if 'c' really landed where it was supposed to
-    let follow_up = queue
-        .add_ide_operation(IdeAdd::new(file_path.clone(), 0, 2, 'd', false))
+    queue
+        .add_ide_operation(IdeAdd::new(file_path.clone(), 0, 3, 'd', 43))
+        .await
         .expect("failed to add follow-up character");
+
+    let calls = ide_add_calls();
+    assert_eq!(calls.len(), 2, "ide_add_callback should have fired twice");
+    let follow_up = calls[1].0.clone();
     assert_eq!(
         (
             follow_up.crdt.relation.parent_id,
             follow_up.crdt.relation.parent_peer
         ),
         (op.crdt.id, op.crdt.peer),
-        "'d' should have parented on 'c', proving 'c' really landed at (0,2)"
+        "'d' should have parented on 'c', proving 'c' really landed at (0,3)"
     );
 
     teardown("scratch_queue_add_ide");
 }
 
-#[test]
-fn remove_ide_operation_guards_the_sentinel() {
+#[tokio::test]
+async fn remove_ide_operation_applies_and_fires_callback() {
+    // guarding the root sentinel from removal now lives at the IDE layer
+    // (extension.js never emits a remove targeting it), not here -- this only
+    // covers an ordinary removal.
     let (mut queue, file_path) = setup("scratch_queue_remove_sentinel", "a");
 
-    // (0, 0) is 'a', not the sentinel -- a normal, valid removal
-    let op = queue
-        .remove_ide_operation(IdeRemove::new(file_path.clone(), 0, 0, false))
-        .expect("failed to remove a real character");
-    assert_eq!(op.id, 1);
-
-    // asking to remove "the whole line" for line 0 resolves to the sentinel (0, 0)
-    // as its anchor -- this must be rejected, not passed through to remove_crdt
-    // (which would underflow trying to merge line 0 into line "-1")
-    let result = queue.remove_ide_operation(IdeRemove::new(file_path.clone(), 0, 0, true));
-    assert!(
-        result.is_err(),
-        "removing the sentinel line-anchor should error, not panic"
-    );
+    // (0, 1) is 'a' -- index 0 is the line's own anchor (the sentinel for line 0),
+    // not 'a' itself
+    queue
+        .remove_ide_operation(Remove::new(file_path.clone(), 1, 0, 0))
+        .await;
+    let calls = ide_remove_calls();
+    assert_eq!(calls.len(), 1, "ide_remove_callback should have fired");
+    assert_eq!(calls[0].id, 1);
 
     teardown("scratch_queue_remove_sentinel");
 }
 
-#[test]
-fn add_network_operation_applies_and_fires_callback() {
+#[tokio::test]
+async fn add_network_operation_applies_and_fires_callback() {
     let (mut queue, file_path) = setup("scratch_queue_add_network", "a");
 
     // id 1 is 'a', the only real character -- parent it on the sentinel (0, 0)
     let relation = CrdtRelation::new('z', 0, 0);
-    let op = NetworkAdd::new(file_path, CRDT::new(2, 1, relation), 0, true);
-    queue.add_network_operation(op);
+    let op = NetworkAdd::new(file_path, CRDT::new(2, 1, relation), 0);
+    queue.add_network_operation(op).await;
 
     assert_eq!(
         add_calls().len(),
@@ -126,8 +169,8 @@ fn add_network_operation_applies_and_fires_callback() {
     teardown("scratch_queue_add_network");
 }
 
-#[test]
-fn out_of_order_add_resolves_once_parent_arrives() {
+#[tokio::test]
+async fn out_of_order_add_resolves_once_parent_arrives() {
     // regression test: add_crdt used to panic ("no entry found for key") instead of
     // returning Err when the parent hadn't arrived yet, which meant add_network_operation
     // never reached its backlog branch at all for exactly the case it exists to handle.
@@ -135,8 +178,8 @@ fn out_of_order_add_resolves_once_parent_arrives() {
 
     // the child arrives first, parented on id 999 which doesn't exist yet
     let child_relation = CrdtRelation::new('x', 999, 0);
-    let child = NetworkAdd::new(file_path.clone(), CRDT::new(1000, 1, child_relation), 0, false);
-    queue.add_network_operation(child);
+    let child = NetworkAdd::new(file_path.clone(), CRDT::new(1000, 1, child_relation), 0);
+    queue.add_network_operation(child).await;
     assert_eq!(
         add_calls().len(),
         0,
@@ -145,8 +188,8 @@ fn out_of_order_add_resolves_once_parent_arrives() {
 
     // now the parent arrives, itself parented on the sentinel
     let parent_relation = CrdtRelation::new('p', 0, 0);
-    let parent = NetworkAdd::new(file_path, CRDT::new(999, 0, parent_relation), 0, true);
-    queue.add_network_operation(parent);
+    let parent = NetworkAdd::new(file_path, CRDT::new(999, 0, parent_relation), 0);
+    queue.add_network_operation(parent).await;
 
     assert_eq!(
         add_calls().len(),
@@ -157,8 +200,8 @@ fn out_of_order_add_resolves_once_parent_arrives() {
     teardown("scratch_queue_out_of_order");
 }
 
-#[test]
-fn three_backlogged_children_of_same_parent_all_resolve() {
+#[tokio::test]
+async fn three_backlogged_children_of_same_parent_all_resolve() {
     // regression test: the backlog-replay loop used a fixed 0..len() range with
     // remove(i) inside, which either skipped the element that shifted into i or ran
     // past the shrunk Vec's bounds -- and separately, a compensating `i -= 1` on a
@@ -167,14 +210,14 @@ fn three_backlogged_children_of_same_parent_all_resolve() {
 
     for (id, c) in [(1000, 'x'), (1001, 'y'), (1002, 'z')] {
         let relation = CrdtRelation::new(c, 999, 0);
-        let op = NetworkAdd::new(file_path.clone(), CRDT::new(id, 1, relation), 0, false);
-        queue.add_network_operation(op);
+        let op = NetworkAdd::new(file_path.clone(), CRDT::new(id, 1, relation), 0);
+        queue.add_network_operation(op).await;
     }
     assert_eq!(add_calls().len(), 0, "all three should still be backlogged");
 
     let parent_relation = CrdtRelation::new('p', 0, 0);
-    let parent = NetworkAdd::new(file_path, CRDT::new(999, 0, parent_relation), 0, true);
-    queue.add_network_operation(parent);
+    let parent = NetworkAdd::new(file_path, CRDT::new(999, 0, parent_relation), 0);
+    queue.add_network_operation(parent).await;
 
     assert_eq!(
         add_calls().len(),
@@ -185,24 +228,24 @@ fn three_backlogged_children_of_same_parent_all_resolve() {
     teardown("scratch_queue_three_children");
 }
 
-#[test]
-fn chained_dependency_resolves_transitively() {
+#[tokio::test]
+async fn chained_dependency_resolves_transitively() {
     let (mut queue, file_path) = setup("scratch_queue_chained", "a");
 
     // A depends on B (id 998), B depends on the not-yet-arrived id 999
     let relation_b = CrdtRelation::new('b', 999, 0);
-    let op_b = NetworkAdd::new(file_path.clone(), CRDT::new(998, 1, relation_b), 0, false);
+    let op_b = NetworkAdd::new(file_path.clone(), CRDT::new(998, 1, relation_b), 0);
     let relation_a = CrdtRelation::new('a', 998, 1);
-    let op_a = NetworkAdd::new(file_path.clone(), CRDT::new(1000, 2, relation_a), 0, false);
+    let op_a = NetworkAdd::new(file_path.clone(), CRDT::new(1000, 2, relation_a), 0);
 
     // deliver the dependent before its own dependency, in both cases
-    queue.add_network_operation(op_a);
-    queue.add_network_operation(op_b);
+    queue.add_network_operation(op_a).await;
+    queue.add_network_operation(op_b).await;
     assert_eq!(add_calls().len(), 0, "both should still be backlogged");
 
     let parent_relation = CrdtRelation::new('p', 0, 0);
-    let parent = NetworkAdd::new(file_path, CRDT::new(999, 0, parent_relation), 0, true);
-    queue.add_network_operation(parent);
+    let parent = NetworkAdd::new(file_path, CRDT::new(999, 0, parent_relation), 0);
+    queue.add_network_operation(parent).await;
 
     assert_eq!(
         add_calls().len(),
@@ -213,32 +256,33 @@ fn chained_dependency_resolves_transitively() {
     teardown("scratch_queue_chained");
 }
 
-#[test]
-fn remove_network_operation_applies_and_fires_callback() {
+#[tokio::test]
+async fn remove_network_operation_applies_and_fires_callback() {
     let (mut queue, file_path) = setup("scratch_queue_remove_network", "ab");
 
-    let op = NetworkRemove::new(file_path, 1, 0, 0);
-    queue.remove_network_operation(op);
+    // id 1 is 'a', at (0, 1) now that index 0 is the line's anchor
+    let op = Remove::new(file_path, 1, 0, 0);
+    queue.remove_network_operation(op).await;
 
     assert_eq!(
         remove_calls(),
-        vec![(0, 0, false)],
-        "removing 'a' should fire the callback with its position and merge-flag"
+        vec![(0, 1)],
+        "removing 'a' should fire the callback with its position"
     );
 
     teardown("scratch_queue_remove_network");
 }
 
-#[test]
-fn remove_arriving_before_its_target_backlogs_then_resolves() {
+#[tokio::test]
+async fn remove_arriving_before_its_target_backlogs_then_resolves() {
     // regression test: the remove_backlog replay loop declared `j` non-mut and never
     // incremented it, so any incoming add would spin forever the moment
     // remove_backlog was non-empty -- confirmed by actually hanging `cargo test`.
     let (mut queue, file_path) = setup("scratch_queue_remove_before_add", "a");
 
     // a remove arrives for id 999, which doesn't exist in the tree yet
-    let pending_remove = NetworkRemove::new(file_path.clone(), 999, 0, 0);
-    queue.remove_network_operation(pending_remove);
+    let pending_remove = Remove::new(file_path.clone(), 999, 0, 0);
+    queue.remove_network_operation(pending_remove).await;
     assert_eq!(
         remove_calls().len(),
         0,
@@ -247,8 +291,8 @@ fn remove_arriving_before_its_target_backlogs_then_resolves() {
 
     // now id 999 itself arrives, parented on the sentinel
     let relation = CrdtRelation::new('z', 0, 0);
-    let op = NetworkAdd::new(file_path, CRDT::new(999, 0, relation), 0, true);
-    queue.add_network_operation(op);
+    let op = NetworkAdd::new(file_path, CRDT::new(999, 0, relation), 0);
+    queue.add_network_operation(op).await;
 
     assert_eq!(add_calls().len(), 1, "the add itself should have applied");
     assert_eq!(
@@ -260,8 +304,8 @@ fn remove_arriving_before_its_target_backlogs_then_resolves() {
     teardown("scratch_queue_remove_before_add");
 }
 
-#[test]
-fn remove_backlog_uses_its_own_index_not_the_add_backlogs_leftover() {
+#[tokio::test]
+async fn remove_backlog_uses_its_own_index_not_the_add_backlogs_leftover() {
     // regression test: the remove_backlog branch called `self.remove_backlog.remove(i)`
     // using `i` -- the *add*-backlog loop's index variable, still in scope -- instead
     // of its own `j`. This only misbehaves when the add-backlog loop has already run
@@ -272,25 +316,20 @@ fn remove_backlog_uses_its_own_index_not_the_add_backlogs_leftover() {
     // one unrelated, still-unresolved add sitting in add_backlog, so its loop's `i`
     // ends up at 1 (not 0) after failing to match this call's incoming id
     let unrelated_relation = CrdtRelation::new('u', 12345, 0);
-    let unrelated = NetworkAdd::new(
-        file_path.clone(),
-        CRDT::new(9000, 1, unrelated_relation),
-        0,
-        false,
-    );
-    queue.add_network_operation(unrelated);
+    let unrelated = NetworkAdd::new(file_path.clone(), CRDT::new(9000, 1, unrelated_relation), 0);
+    queue.add_network_operation(unrelated).await;
 
     // one pending remove for id 999, sitting at index 0 (the only valid index) of
     // remove_backlog
-    let pending_remove = NetworkRemove::new(file_path.clone(), 999, 0, 0);
-    queue.remove_network_operation(pending_remove);
+    let pending_remove = Remove::new(file_path.clone(), 999, 0, 0);
+    queue.remove_network_operation(pending_remove).await;
 
     // id 999 now arrives -- the add-backlog loop runs first (its one unrelated entry
     // doesn't match, so i ends at 1), then the remove-backlog loop must remove its
     // own match at j == 0, not at the leftover i == 1
     let relation = CrdtRelation::new('z', 0, 0);
-    let op = NetworkAdd::new(file_path, CRDT::new(999, 0, relation), 0, true);
-    queue.add_network_operation(op);
+    let op = NetworkAdd::new(file_path, CRDT::new(999, 0, relation), 0);
+    queue.add_network_operation(op).await;
 
     assert_eq!(add_calls().len(), 1, "the id-999 add itself should have applied");
     assert_eq!(

@@ -6,6 +6,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::shar::prelude::{IdSize, PeerIdSize};
+
 /// A node's value, parent pointer, and deleted flag.
 #[derive(Copy, PartialEq, Clone, Debug, Deserialize, Serialize)]
 pub struct CrdtRelation {
@@ -60,17 +62,14 @@ pub struct NetworkAdd {
     pub crdt: CRDT,
     /// Ring-search hint line, not a guaranteed final position.
     pub row: usize,
-    /// Whether this is a front-of-line insert.
-    pub start_line: bool,
 }
 
 impl NetworkAdd {
-    pub fn new(path: PathBuf, crdt: CRDT, row: usize, start_line: bool) -> Self {
+    pub fn new(path: PathBuf, crdt: CRDT, row: usize) -> Self {
         NetworkAdd {
             file_path: path,
             crdt: crdt,
             row: row,
-            start_line: start_line,
         }
     }
 }
@@ -78,7 +77,7 @@ impl NetworkAdd {
 /// A single character remote removal — just a target `(id, peer)`,
 /// no value or parent needed. See [`crate::shar::core::queue::SharQueue`].
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct NetworkRemove {
+pub struct Remove {
     /// The file this removal belongs to.
     pub file_path: PathBuf,
     /// Target id.
@@ -89,9 +88,9 @@ pub struct NetworkRemove {
     pub row: usize,
 }
 
-impl NetworkRemove {
+impl Remove {
     pub fn new(file_path: PathBuf, id: u32, peer: u8, row: usize) -> Self {
-        NetworkRemove {
+        Remove {
             file_path: file_path,
             id: id,
             peer: peer,
@@ -112,8 +111,7 @@ pub struct IdeAdd {
     pub parent_col: usize,
     /// the value of this addition
     pub val: char,
-    /// is this position at the beginning of a line?
-    pub start_line: bool,
+    pub tag: u32,
 }
 
 impl IdeAdd {
@@ -122,54 +120,22 @@ impl IdeAdd {
         parent_row: usize,
         parent_col: usize,
         val: char,
-        start_line: bool,
+        tag: u32,
     ) -> Self {
         IdeAdd {
             file_path: file_path,
             parent_row: parent_row,
             parent_col: parent_col,
             val: val,
-            start_line: start_line,
+            tag: tag,
         }
     }
 }
-
-/// A single character IDE removal — just a target `(id, peer)`,
-/// no value or parent needed. See [`crate::shar::core::queue::SharQueue`].
-#[derive(Clone, Debug, Deserialize)]
-pub struct IdeRemove {
-    /// The file this removal belongs to
-    pub file_path: PathBuf,
-    /// the row of the this removal
-    pub row: usize,
-    /// the col of this removal
-    pub col: usize,
-    /// is this removal a line?
-    pub is_whole_line: bool,
-}
-
-impl IdeRemove {
-    pub fn new(file_path: PathBuf, row: usize, col: usize, is_whole_line: bool) -> Self {
-        IdeRemove {
-            file_path: file_path,
-            row: row,
-            col: col,
-            is_whole_line: is_whole_line,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum IdeOp {
-    ADD (IdeAdd),
-    REMOVE (IdeRemove),
-}
-
 
 #[derive(Debug, Clone)]
 pub enum NetworkOp {
-    ADD (NetworkAdd),
-    REMOVE (NetworkRemove), 
+    ADD(NetworkAdd),
+    REMOVE(Remove),
 }
 
 /// A Websocket connection message
@@ -179,4 +145,21 @@ pub struct Connect {
     pub local: bool,
     /// The path of the connection
     pub path: PathBuf,
+}
+
+#[derive(Debug, Serialize)]
+pub struct IdeAddConfirmed {
+    pub tag: u32,
+    pub id: IdSize,
+    pub peer: PeerIdSize,
+}
+
+impl IdeAddConfirmed {
+    pub fn new(tag: u32, id: IdSize, peer: PeerIdSize) -> Self {
+        IdeAddConfirmed {
+            tag: tag,
+            id: id,
+            peer: peer,
+        }
+    }
 }

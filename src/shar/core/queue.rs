@@ -3,28 +3,40 @@
 
 use crate::shar::core::tree::SharDirectory;
 use crate::shar::prelude::*;
-use crate::types::{CrdtRelation, IdeAdd, IdeOp, IdeRemove, NetworkAdd, NetworkOp, NetworkRemove};
+use crate::types::{CrdtRelation, IdeAdd, IdeAddConfirmed, NetworkAdd, NetworkOp, Remove};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::pin::Pin;
+
+// Pin says (keep this locked in memory)
+// The reason we need this is that async functions become self-refernetial structs, and if they're
+// moved in memory their references to themselves become stale, which creates undefined behaviour
+//
+//
+// Send tells the compiler that this is safe to move to another thread to free up this one. It
+// doesn't necessarily move it, it just says it can be moved
+type BoxedFun = Pin<Box<dyn Future<Output = ()> + Send>>;
 
 /// Owns the tree for one shar session and mediates every read/write to it.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct SharQueue {
-    /// Remote adds waiting on a parent that hasn't arrived yet.
-    ide_backlog: HashMap<(usize, usize), Vec<IdeOp>>,
-    /// Remote removes waiting on a target that hasn't arrived yet.
+    /// IDE adds waiting on a parent that hasn't arrived yet.
+    ide_backlog: HashMap<(usize, usize), Vec<IdeAdd>>,
+    /// network operations waiting on a target that hasn't arrived yet.
     network_backlog: HashMap<(IdSize, PeerIdSize), Vec<NetworkOp>>,
     /// This replica's peer id.
     peer: PeerIdSize,
     tree: SharDirectory,
     /// Shared across every file in the directory.
     counter: u32,
+
     /// Called with `(row, col)` when an add is applied.
-    pub network_add_callback: Option<fn(usize, usize)>,
+    pub network_add_callback: Option<Box<dyn Fn(usize, usize) -> BoxedFun + Send + Sync>>,
     /// Called with `(row, col, was_line_merge)` when a remove is applied.
-    pub network_remove_callback: Option<fn(usize, usize, bool)>,
-    pub ide_add_callback: Option<fn(NetworkAdd)>,
-    pub ide_remove_callback: Option<fn(NetworkRemove)>,
+    pub network_remove_callback: Option<Box<dyn Fn(usize, usize) -> BoxedFun + Send + Sync>>,
+    pub ide_add_callback:
+        Option<Box<dyn Fn(NetworkAdd, IdeAddConfirmed) -> BoxedFun + Send + Sync>>,
+    pub ide_remove_callback: Option<Box<dyn Fn(Remove) -> BoxedFun + Send + Sync>>,
 }
 
 impl SharQueue {
@@ -36,10 +48,10 @@ impl SharQueue {
     pub fn new(
         dir_path: PathBuf,
         this_peer_id: PeerIdSize,
-        network_add_callback: fn(usize, usize),
-        network_remove_callback: fn(usize, usize, bool),
-        ide_add_callback: fn(NetworkAdd),
-        ide_remove_callback: fn(NetworkRemove),
+        network_add_callback: Box<dyn Fn(usize, usize) -> BoxedFun + Send + Sync>,
+        network_remove_callback: Box<dyn Fn(usize, usize) -> BoxedFun + Send + Sync>,
+        ide_add_callback: Box<dyn Fn(NetworkAdd, IdeAddConfirmed) -> BoxedFun + Send + Sync>,
+        ide_remove_callback: Box<dyn Fn(Remove) -> BoxedFun + Send + Sync>,
     ) -> Result<Self> {
         let mut counter: u32 = 0;
         let tree = SharDirectory::new(dir_path, &mut counter)?;
@@ -59,26 +71,27 @@ impl SharQueue {
         Ok(queue)
     }
 
+    /// Every file's `(id, peer)` projection, keyed by its full path. See
+    /// [`SharDirectory::identities`].
+    pub fn identities(&self) -> Vec<(PathBuf, Vec<Vec<(IdSize, PeerIdSize)>>)> {
+        self.tree.identities()
+    }
+
     /// Applies a locally-typed character and returns the `NetworkAdd` to
     /// send to peers. `start_line` resolves the parent via the line's
     /// start-of-line anchor instead of `(paren:willt_row, parent_col)`.
-    pub fn add_ide_operation(&mut self, op: IdeAdd) -> Result<()> {
+    pub async fn add_ide_operation(&mut self, op: IdeAdd) -> Result<()> {
         tracing::debug!(?op, "add_ide_operation called");
         let op_clone = op.clone();
         let file_path = op_clone.file_path;
         let parent_row = op_clone.parent_row;
         let parent_col = op_clone.parent_col;
         let val = op_clone.val;
-        let start_line = op_clone.start_line;
+        let tag = op_clone.tag;
 
         // find the parent id
 
-        let parent_id_peer;
-        if start_line {
-            parent_id_peer = self.tree.get_line_id_peer(&file_path, parent_row);
-        } else {
-            parent_id_peer = self.tree.get_id_peer(&file_path, (parent_row, parent_col));
-        }
+        let parent_id_peer = self.tree.get_id_peer(&file_path, (parent_row, parent_col));
 
         match parent_id_peer {
             Ok(parent) => {
@@ -86,10 +99,10 @@ impl SharQueue {
                     self.counter += 1;
                     let relation = CrdtRelation::new(val, parent_real.0, parent_real.1);
                     let crdt = CRDT::new(self.counter, self.peer, relation);
-                    let network_op =
-                        NetworkAdd::new(file_path.clone(), crdt.clone(), parent_row, start_line);
+                    let network_op = NetworkAdd::new(file_path.clone(), crdt.clone(), parent_row);
+                    let return_op = IdeAddConfirmed::new(tag, self.counter, self.peer);
 
-                    let add = self.tree.add_crdt(&file_path, parent_row, crdt, start_line);
+                    let add = self.tree.add_crdt(&file_path, parent_row, crdt);
 
                     match add {
                         Ok(add) => {
@@ -99,11 +112,14 @@ impl SharQueue {
                                     col = pos.1,
                                     "add_ide_operation resolved position, clearing dependants"
                                 );
-                                self.clear_ide_backlog(pos.0, pos.1);
-                                (self.ide_add_callback.unwrap())(network_op);
+                                self.clear_ide_backlog(pos.0, pos.1).await;
+                                (self.ide_add_callback.as_ref().unwrap())(network_op, return_op)
+                                    .await;
                                 Ok(())
                             } else {
-                                tracing::debug!("add_ide_operation was a no-op, likely already added");
+                                tracing::debug!(
+                                    "add_ide_operation was a no-op, likely already added"
+                                );
                                 Ok(())
                             }
                         }
@@ -119,88 +135,40 @@ impl SharQueue {
                         "add_ide_operation backlogged, parent not found yet"
                     );
                     if let Some(backlogged) = self.ide_backlog.get_mut(&(parent_row, parent_col)) {
-                        backlogged.push(IdeOp::ADD(op));
+                        backlogged.push(op);
                     } else {
-                        let _ = self
-                            .ide_backlog
-                            .insert((parent_row, parent_col), vec![IdeOp::ADD(op)]);
+                        let _ = self.ide_backlog.insert((parent_row, parent_col), vec![op]);
                     }
 
                     Ok(())
                 }
             }
 
-            Err(e) => Err(Error::Generic(format!("Something went wrong: {e}"))),
+            Err(_e) => {
+                tracing::debug!(
+                    parent_row,
+                    parent_col,
+                    "add_ide_operation backlogged, parent not found yet"
+                );
+                if let Some(backlogged) = self.ide_backlog.get_mut(&(parent_row, parent_col)) {
+                    backlogged.push(op);
+                } else {
+                    let _ = self.ide_backlog.insert((parent_row, parent_col), vec![op]);
+                }
+
+                Ok(())
+            }
         }
     }
 
     /// Applies a locally-triggered removal and returns the `NetworkRemove` to
     /// send to peers. `is_whole_line` removes `row`'s line-start anchor
     /// instead of `(row, col)`. Rejects the root sentinel as a target.
-    pub fn remove_ide_operation(&mut self, op: IdeRemove) -> Result<()> {
-        tracing::debug!(?op, "remove_ide_operation called");
-        let op_clone = op.clone();
+    pub async fn remove_ide_operation(&mut self, op: Remove) {
+        let operation = self.remove_operation(op.clone());
 
-        let file_path = op_clone.file_path;
-        let row = op_clone.row;
-        let col = op_clone.col;
-        let is_whole_line = op_clone.is_whole_line;
-        // find the id/peer of the crdt
-        let id_peer;
-
-        if is_whole_line {
-            id_peer = self.tree.get_line_id_peer(&file_path, row)?;
-        } else {
-            id_peer = self.tree.get_id_peer(&file_path, (row, col))?;
-        }
-
-        match id_peer {
-            Some(id_peer) => {
-                // make sure the sentinel never gets through.
-                if id_peer == (0, 0) {
-                    return Err(Error::OutOfBounds(String::from("Can't remove sentinel")));
-                }
-
-                let remove = self.tree.remove_crdt(&file_path, row, id_peer.0, id_peer.1);
-
-                match remove {
-                    Ok(_remove) => {
-                        (self.ide_remove_callback.unwrap())(NetworkRemove::new(
-                            file_path.clone(),
-                            id_peer.0,
-                            id_peer.1,
-                            row,
-                        ));
-                        Ok(())
-                    }
-
-                    Err(_e) => {
-                        tracing::debug!(
-                            row,
-                            col,
-                            "remove_ide_operation backlogged, target existed but the remove itself failed"
-                        );
-                        if let Some(backlogged) = self.ide_backlog.get_mut(&(row, col)) {
-                            backlogged.push(IdeOp::REMOVE(op));
-                        } else {
-                            let _ = self.ide_backlog.insert((row, col), vec![IdeOp::REMOVE(op)]);
-                        }
-                        Ok(())
-                    }
-                }
-            }
-
-            // If None, this element doesn't currently exist in the shar.
-            // In this case, add it to the backlog
-            None => {
-                tracing::debug!(row, col, "remove_ide_operation backlogged, target doesn't exist yet");
-                if let Some(backlogged) = self.ide_backlog.get_mut(&(row, col)) {
-                    backlogged.push(IdeOp::REMOVE(op));
-                } else {
-                    let _ = self.ide_backlog.insert((row, col), vec![IdeOp::REMOVE(op)]);
-                }
-                Ok(())
-            }
+        if let Some(_) = operation {
+            (self.ide_remove_callback.as_ref().unwrap())(op).await;
         }
     }
 
@@ -209,15 +177,14 @@ impl SharQueue {
     ///
     /// Panics if `network_add_callback` is `None` — only possible if this `SharQueue`
     /// wasn't built via [`Self::new`].
-    pub fn add_network_operation(&mut self, op: NetworkAdd) {
+    pub async fn add_network_operation(&mut self, op: NetworkAdd) {
         tracing::debug!(?op, "add_network_operation called");
         let crdt = op.crdt;
         let row = op.row;
         let file_path = op.file_path.clone();
-        let start_line = op.start_line;
 
         // add crdt
-        let pos = self.tree.add_crdt(&file_path, row, crdt, start_line);
+        let pos = self.tree.add_crdt(&file_path, row, crdt);
 
         match pos {
             Ok(pos) => {
@@ -227,9 +194,9 @@ impl SharQueue {
                         col = position.1,
                         "add_network_operation resolved position, clearing dependants"
                     );
-                    (self.network_add_callback.unwrap())(position.0, position.1);
+                    (self.network_add_callback.as_ref().unwrap())(position.0, position.1).await;
 
-                    self.clear_network_backlog(crdt.id, crdt.peer);
+                    self.clear_network_backlog(crdt.id, crdt.peer).await;
                 } else {
                     tracing::debug!("add_network_operation was a no-op, likely already added");
                     return;
@@ -260,7 +227,15 @@ impl SharQueue {
     ///
     /// Panics if `network_remove_callback` is `None` — only possible if this
     /// `SharQueue` wasn't built via [`Self::new`].
-    pub fn remove_network_operation(&mut self, op: NetworkRemove) {
+    pub async fn remove_network_operation(&mut self, op: Remove) {
+        let operation = self.remove_operation(op);
+
+        if let Some(op_frfr) = operation {
+            (self.network_remove_callback.as_ref().unwrap())(op_frfr.0, op_frfr.1).await;
+        }
+    }
+
+    fn remove_operation(&mut self, op: Remove) -> Option<(usize, usize)> {
         tracing::debug!(?op, "remove_network_operation called");
         let op_clone = op.clone();
         let file_path = op_clone.file_path;
@@ -276,30 +251,31 @@ impl SharQueue {
                     tracing::debug!(
                         row = val.0,
                         col = val.1,
-                        is_line = val.2,
                         "remove_network_operation resolved target"
                     );
-                    (self.network_remove_callback.unwrap())(val.0, val.1, val.2);
+                    return Some((val.0, val.1));
                 } else {
                     // if the remove returns none, the value has already been removed so do nothing
                     tracing::debug!("remove_network_operation target already removed, no-op");
-                    return;
+                    return None;
                 }
             }
             Err(e) => {
                 tracing::debug!(error = %e, "remove_network_operation backlogged, target not found yet");
                 if let Some(backlogged) = self.network_backlog.get_mut(&(id, peer)) {
                     backlogged.push(NetworkOp::REMOVE(op));
+                    return None;
                 } else {
                     let _ = self
                         .network_backlog
                         .insert((id, peer), vec![NetworkOp::REMOVE(op)]);
+                    return None;
                 }
             }
         }
     }
 
-    fn clear_network_backlog(&mut self, id: IdSize, peer: PeerIdSize) {
+    async fn clear_network_backlog(&mut self, id: IdSize, peer: PeerIdSize) {
         // get the list of dependancies
         let dependancies = self.network_backlog.remove(&(id, peer));
 
@@ -307,11 +283,11 @@ impl SharQueue {
             for item in list {
                 match item {
                     NetworkOp::ADD(op) => {
-                        self.add_network_operation(op);
+                        Box::pin(self.add_network_operation(op)).await;
                     }
 
                     NetworkOp::REMOVE(op) => {
-                        self.remove_network_operation(op);
+                        self.remove_network_operation(op).await;
                     }
                 }
             }
@@ -321,21 +297,13 @@ impl SharQueue {
         }
     }
 
-    fn clear_ide_backlog(&mut self, row: usize, col: usize) {
+    async fn clear_ide_backlog(&mut self, row: usize, col: usize) {
         // get the list of dependancies
         let dependancies = self.ide_backlog.remove(&(row, col));
 
         if let Some(list) = dependancies {
             for item in list {
-                match item {
-                    IdeOp::ADD(op) => {
-                        let _ = self.add_ide_operation(op);
-                    }
-
-                    IdeOp::REMOVE(op) => {
-                        let _ = self.remove_ide_operation(op);
-                    }
-                }
+                Box::pin(self.add_ide_operation(item)).await;
             }
         } else {
             // there's no dependancy list therefore nothing to do

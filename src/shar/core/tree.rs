@@ -430,15 +430,17 @@ impl SharFile {
     /// Removing a line's start-of-line anchor merges that line onto the one
     /// above it instead, returning `Some((row, col, true))`; an ordinary
     /// removal returns `Some((row, col, false))`.
+    // TODO: Now that removes are connected to id and shit, just give the id, peer pair to the IDE
+    // to figure out how to remove
     pub fn remove_crdt(
         &mut self,
         line_num: usize,
         id: IdSize,
         peer: PeerIdSize,
-        is_line: bool,
-    ) -> Result<Option<(usize, usize, bool)>> {
+    ) -> Result<Option<(usize, usize)>> {
         // remove the crdt from the HashMap
         let crdt_relation = self.characters.get_mut(&(id, peer));
+        let mut is_line = false;
 
         match crdt_relation {
             Some(val) => {
@@ -446,6 +448,10 @@ impl SharFile {
                     return Ok(None);
                 }
                 val.deleted = true;
+
+                if is_line_break(val.value) {
+                    is_line = true;
+                }
             }
 
             None => return Err(Error::Generic(String::from("crdt cannot be found"))),
@@ -470,11 +476,13 @@ impl SharFile {
 
                     // delete the line
                     self.projection.remove(line_num);
-                    return Ok(Some((line_num, 0, true)));
+                    return Ok(Some((line_num, 0)));
                 }
 
                 None => {
-                    return Err(Error::Generic(format!("line does not exist to be deleted")));
+                    return Err(Error::Generic(format!(
+                        "character does not exist to be deleted"
+                    )));
                 }
             }
         }
@@ -485,7 +493,7 @@ impl SharFile {
         match position {
             Ok(pos) => {
                 self.projection[pos.0].remove(pos.1);
-                Ok(Some((pos.0, pos.1, false)))
+                Ok(Some((pos.0, pos.1)))
             }
 
             Err(_e) => Err(Error::Generic(String::from("crdt not found"))),
@@ -575,13 +583,12 @@ impl SharDirectory {
         line_num: usize,
         id: IdSize,
         peer: PeerIdSize,
-        is_line: bool,
-    ) -> Result<Option<(usize, usize, bool)>> {
+    ) -> Result<Option<(usize, usize)>> {
         let path = file_path.iter();
 
         // recursively search for the end of the path
         if let Some(file) = self.find_file(path) {
-            return file.remove_crdt(line_num, id, peer, is_line);
+            return file.remove_crdt(line_num, id, peer);
         } else {
             Err(Error::Generic(String::from("File not found")))
         }
@@ -600,6 +607,23 @@ impl SharDirectory {
         } else {
             Err(Error::Generic(String::from("File not found")))
         }
+    }
+
+    /// Every file's `(id, peer)` projection, keyed by its full path. Lets a
+    /// freshly-joined IDE learn identities for content it didn't type
+    /// itself.
+    pub fn identities(&self) -> Vec<(PathBuf, Vec<Vec<(IdSize, PeerIdSize)>>)> {
+        let mut out: Vec<(PathBuf, Vec<Vec<(IdSize, PeerIdSize)>>)> = self
+            .sub_files
+            .iter()
+            .map(|file| (file.file_path.clone(), file.projection.clone()))
+            .collect();
+
+        for dir in &self.sub_dir {
+            out.extend(dir.identities());
+        }
+
+        out
     }
 
     /// Finds the `SharFile` at `path`, recursing into subdirectories as needed.

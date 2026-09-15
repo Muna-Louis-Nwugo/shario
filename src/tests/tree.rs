@@ -375,16 +375,16 @@ fn test_remove_crdt() {
     // the one before it, per add_file's sequential chain) — tombstone all three to
     // build an actual multi-level tombstone chain, not just a single removed node.
     // None of them are line anchors, so is_line is false throughout
-    dir.remove_crdt(&file_path, 0, 10, 0, false)
+    dir.remove_crdt(&file_path, 0, 10, 0)
         .expect("failed to remove first character in the chain");
-    dir.remove_crdt(&file_path, 0, 11, 0, false)
+    dir.remove_crdt(&file_path, 0, 11, 0)
         .expect("failed to remove second character in the chain");
-    dir.remove_crdt(&file_path, 0, 12, 0, false)
+    dir.remove_crdt(&file_path, 0, 12, 0)
         .expect("failed to remove third character in the chain");
 
     // retrying an already-removed one is a no-op, not an error
     assert_eq!(
-        dir.remove_crdt(&file_path, 0, 11, 0, false)
+        dir.remove_crdt(&file_path, 0, 11, 0)
             .expect("failed to no-op a repeated removal"),
         None,
         "removing an already-deleted crdt should report None, not a fresh position"
@@ -392,7 +392,7 @@ fn test_remove_crdt() {
 
     // removing something that was never added at all is an error
     assert!(
-        dir.remove_crdt(&file_path, 0, 999_999, 0, false).is_err(),
+        dir.remove_crdt(&file_path, 0, 999_999, 0).is_err(),
         "removing a nonexistent crdt should fail, not succeed"
     );
 
@@ -515,7 +515,7 @@ fn removing_a_newline_merges_lines_and_keeps_anchors_aligned() {
     // ids: a=1, \n=2, b=3, \n=4, c=5. \n(2) is line 1's own anchor; \n(4) is line 2's.
     // remove the first newline (id 2, at (1, 0)): "b" should merge onto line 0, right
     // after "a"
-    file.remove_crdt(1, 2, 0, true)
+    file.remove_crdt(1, 2, 0)
         .expect("failed to remove first newline");
     assert_eq!(
         file.get_id_peer((0, 2)),
@@ -538,7 +538,7 @@ fn removing_a_newline_merges_lines_and_keeps_anchors_aligned() {
 
     // remove the second newline (id 4, now at (1, 0) after the previous merge shifted
     // line 2 down to line 1): the merged line and "c" should merge too
-    file.remove_crdt(1, 4, 0, true)
+    file.remove_crdt(1, 4, 0)
         .expect("failed to remove second newline");
     assert_eq!(
         file.get_id_peer((0, 3)),

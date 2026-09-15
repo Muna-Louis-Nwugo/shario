@@ -26,8 +26,8 @@ use socketioxide::{
 use crate::{
     shar::core::queue::SharQueue,
     shar::error::Error,
-    shar::prelude::PeerIdSize,
-    types::{Connect, IdeAdd, IdeRemove, NetworkAdd, NetworkRemove},
+    shar::prelude::{IdSize, PeerIdSize},
+    types::{Connect, IdeAdd, IdeAddConfirmed, NetworkAdd, Remove},
 };
 
 /// Defines available Shar Commands
@@ -39,14 +39,26 @@ struct QueueWrap {
 }
 
 impl QueueWrap {
-    pub async fn new(&mut self, dir_path: PathBuf, this_peer_id: PeerIdSize) -> Result<(), Error> {
+    pub async fn new(
+        &mut self,
+        dir_path: PathBuf,
+        this_peer_id: PeerIdSize,
+        socket: SocketRef,
+    ) -> Result<(), Error> {
+        let socket1 = socket.clone();
+        let socket2 = socket.clone();
+        let socket3 = socket.clone();
+        let socket4 = socket.clone();
+
         let real_queue = SharQueue::new(
             dir_path,
             this_peer_id,
-            network_add_callback,
-            network_remove_callback,
-            ide_add_callback,
-            ide_remove_callback,
+            Box::new(move |row, col| Box::pin(network_add_callback(socket1.clone(), row, col))),
+            Box::new(move |row, col| Box::pin(network_remove_callback(socket2.clone(), row, col))),
+            Box::new(move |op_broadcast, op_return| {
+                Box::pin(ide_add_callback(socket3.clone(), op_broadcast, op_return))
+            }),
+            Box::new(move |remove| Box::pin(ide_remove_callback(socket4.clone(), remove))),
         )?;
         let mut guard = self.queue.write().await; // locks the *shared* RwLock every clone points at
         if guard.network_add_callback.is_none() {
@@ -57,22 +69,27 @@ impl QueueWrap {
 
     pub async fn add_ide_operation(&self, op: IdeAdd) -> Result<(), Error> {
         let mut queue = self.queue.write().await;
-        queue.add_ide_operation(op)
+        queue.add_ide_operation(op).await
     }
 
-    pub async fn remove_ide_operation(&self, op: IdeRemove) -> Result<(), Error> {
+    pub async fn remove_ide_operation(&self, op: Remove) {
         let mut queue = self.queue.write().await;
-        queue.remove_ide_operation(op)
+        queue.remove_ide_operation(op).await
     }
 
     pub async fn add_network_operation(&self, op: NetworkAdd) {
         let mut queue = self.queue.write().await;
-        queue.add_network_operation(op);
+        queue.add_network_operation(op).await
     }
 
-    pub async fn remove_network_operation(&self, op: NetworkRemove) {
+    pub async fn remove_network_operation(&self, op: Remove) {
         let mut queue = self.queue.write().await;
-        queue.remove_network_operation(op);
+        queue.remove_network_operation(op).await
+    }
+
+    pub async fn identities(&self) -> Vec<(PathBuf, Vec<Vec<(IdSize, PeerIdSize)>>)> {
+        let queue = self.queue.read().await;
+        queue.identities()
     }
 }
 
@@ -160,12 +177,24 @@ async fn on_connect(socket: SocketRef) {
                 // creates a new "queue"
                 // right now, this is just a stub
                 if let Err(e) = queue
-                    .new(data.path, 1)
+                    .new(data.path, 1, socket.clone())
                     .await
                 {
                     tracing::error!(socket_id = %socket.id, error = %e, "failed to initialize queue");
                 }
                 socket.join("local");
+
+                // tells the joining IDE the real (id, peer) behind every
+                // character it didn't type itself -- see extension.js's
+                // "initial-state" handler
+                for (file_path, lines) in queue.identities().await {
+                    let _ = socket
+                        .within("local").emit(
+                            "initial-state",
+                            &serde_json::json!({ "file_path": file_path, "lines": lines }),
+                        )
+                        .await;
+                }
             } else {
                 socket.join("network");
             }
@@ -183,8 +212,7 @@ async fn on_connect(socket: SocketRef) {
             match add_attempt {
                 // TODO: Move all of this stuff into the callbacks
                 Ok(packet) => {
-                    tracing::debug!(socket_id = %socket.id, ?packet, "ide-add succeeded, broadcasting network-add");
-                    let _ = socket.within("network").emit("network-add", &packet).await;
+                    tracing::debug!(socket_id = %socket.id, "ide-add attempted");
                 }
 
                 Err(e) => {
@@ -197,40 +225,36 @@ async fn on_connect(socket: SocketRef) {
 
     socket.on(
         "remove",
-        async |socket: SocketRef, Data::<IdeRemove>(data), queue: State<QueueWrap>| {
+        async |socket: SocketRef, Data::<Remove>(data), queue: State<QueueWrap>| {
             tracing::debug!(socket_id = %socket.id, ?data, "remove received");
             let remove_attempt = queue.remove_ide_operation(data).await;
 
-            match remove_attempt {
-                Ok(packet) => {
-                    tracing::debug!(socket_id = %socket.id, ?packet, "remove succeeded, broadcasting network-remove");
-                    let _ = socket
-                        .within("network")
-                        .emit("network-remove", &packet)
-                        .await;
-                }
-
-                Err(e) => {
-                    tracing::warn!(socket_id = %socket.id, error = %e, "remove failed");
-                    let _ = socket.within("local").emit("ide-remove-failed", &e).await;
-                }
-            }
+            tracing::debug!(socket_id = %socket.id, "remove received ");
         },
     )
 }
 
-fn network_add_callback(row: usize, col: usize) {
+async fn network_add_callback(_socket: SocketRef, row: usize, col: usize) {
     tracing::debug!(row, col, "add applied");
 }
 
-fn network_remove_callback(row: usize, col: usize, is_line: bool) {
-    tracing::debug!(row, col, is_line, "remove applied");
+async fn network_remove_callback(_socket: SocketRef, row: usize, col: usize) {
+    tracing::debug!(row, col, "remove applied");
 }
 
-fn ide_remove_callback(op: NetworkRemove) {
+async fn ide_remove_callback(socket: SocketRef, op: Remove) {
     tracing::debug!(?op, "remove applied");
+    let _ = socket.within("network").emit("network-remove", &op).await;
 }
 
-fn ide_add_callback(op: NetworkAdd) {
-    tracing::debug!(?op, "add applied");
+async fn ide_add_callback(socket: SocketRef, op_broadcast: NetworkAdd, op_return: IdeAddConfirmed) {
+    tracing::debug!(?op_return, "add applied");
+    let _ = socket
+        .within("local")
+        .emit("ide-add-confirmed", &op_return)
+        .await;
+    let _ = socket
+        .within("network")
+        .emit("network-add", &op_broadcast)
+        .await;
 }

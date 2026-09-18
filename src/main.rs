@@ -5,6 +5,7 @@
 // output channel on the VS Code extension side, which only shows what the
 // client sent, not what the server did with it.
 
+mod bench;
 mod shar;
 #[cfg(test)]
 mod tests;
@@ -49,16 +50,16 @@ impl QueueWrap {
         let socket2 = socket.clone();
         let socket3 = socket.clone();
         let socket4 = socket.clone();
+        let socket5 = socket.clone();
 
         let real_queue = SharQueue::new(
             dir_path,
             this_peer_id,
             Box::new(move |row, col| Box::pin(network_add_callback(socket1.clone(), row, col))),
             Box::new(move |row, col| Box::pin(network_remove_callback(socket2.clone(), row, col))),
-            Box::new(move |op_broadcast, op_return| {
-                Box::pin(ide_add_callback(socket3.clone(), op_broadcast, op_return))
-            }),
-            Box::new(move |remove| Box::pin(ide_remove_callback(socket4.clone(), remove))),
+            Box::new(move |op_return| Box::pin(ide_add_confirm_callback(socket3.clone(), op_return))),
+            Box::new(move |op_broadcast| Box::pin(ide_add_callback(socket4.clone(), op_broadcast))),
+            Box::new(move |remove| Box::pin(ide_remove_callback(socket5.clone(), remove))),
         )?;
         let mut guard = self.queue.write().await; // locks the *shared* RwLock every clone points at
         if guard.network_add_callback.is_none() {
@@ -95,6 +96,21 @@ impl QueueWrap {
 
 #[tokio::main]
 async fn main() {
+    // `--bench-internal <trace.json> [label]` replays a trace directly
+    // against SharQueue in-process, skipping the server entirely -- see
+    // src/bench.rs. Checked before any server setup so it can't interfere
+    // with the normal startup path below.
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(idx) = args.iter().position(|a| a == "--bench-internal") {
+        let trace_path = args.get(idx + 1).expect("--bench-internal requires a trace path");
+        let label = args.get(idx + 2).map(String::as_str).unwrap_or("bench-internal");
+        if let Err(e) = bench::run(std::path::Path::new(trace_path), label).await {
+            eprintln!("bench-internal failed: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     // logs go to both stdout and ./shar.<date>.log so a flood -- like a
     // runaway backlog -- can be reviewed in one file after the fact instead
     // of scrolling back through the terminal. Rotates daily and keeps only
@@ -247,12 +263,25 @@ async fn ide_remove_callback(socket: SocketRef, op: Remove) {
     let _ = socket.within("network").emit("network-remove", &op).await;
 }
 
-async fn ide_add_callback(socket: SocketRef, op_broadcast: NetworkAdd, op_return: IdeAddConfirmed) {
-    tracing::debug!(?op_return, "add applied");
-    let _ = socket
-        .within("local")
-        .emit("ide-add-confirmed", &op_return)
-        .await;
+async fn ide_add_confirm_callback(socket: SocketRef, op_return: IdeAddConfirmed) {
+    tracing::debug!(?op_return, "add confirmed");
+    loop {
+        match socket
+            .within("local")
+            .emit("ide-add-confirmed", &op_return)
+            .await
+        {
+            Ok(_) => break,
+            Err(e) => {
+                tracing::warn!(?op_return, error = %e, "ide-add-confirmed emit failed, retrying");
+                tokio::time::sleep(std::time::Duration::from_micros(1)).await;
+            }
+        }
+    }
+}
+
+async fn ide_add_callback(socket: SocketRef, op_broadcast: NetworkAdd) {
+    tracing::debug!(?op_broadcast, "add applied");
     let _ = socket
         .within("network")
         .emit("network-add", &op_broadcast)

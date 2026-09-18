@@ -101,33 +101,49 @@ impl Remove {
 
 /// A single character IDE insertion. See
 /// [`crate::shar::core::queue::SharQueue`].
+///
+/// The parent is referenced by real identity (`parent_id`/`parent_peer`) if
+/// already known -- pre-existing content, or something already confirmed --
+/// or, if the parent is this same connection's own not-yet-confirmed add, by
+/// `parent_tag` instead. Exactly one of the two should be set. Position isn't
+/// used at all: a position can go stale (something earlier gets deleted) in a
+/// way an identity or a tag can't.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct IdeAdd {
     /// The file this addition belongs to
     pub file_path: PathBuf,
-    /// the row of the this addition's parent
-    pub parent_row: usize,
-    /// the col of this addition's parent
-    pub parent_col: usize,
+    pub parent_id: Option<IdSize>,
+    pub parent_peer: Option<PeerIdSize>,
+    /// Set instead of `parent_id`/`parent_peer` when the parent is this same
+    /// connection's own add, sent moments ago and not yet confirmed.
+    pub parent_tag: Option<u32>,
     /// the value of this addition
     pub val: char,
     pub tag: u32,
+    /// Ring-search starting point only -- has no bearing on correctness.
+    /// Unlike `parent_id`/`parent_peer`/`parent_tag`, this is allowed to be
+    /// stale: a wrong hint just costs a wider search, never a wrong result.
+    pub line_hint: usize,
 }
 
 impl IdeAdd {
     pub fn new(
         file_path: PathBuf,
-        parent_row: usize,
-        parent_col: usize,
+        parent_id: Option<IdSize>,
+        parent_peer: Option<PeerIdSize>,
+        parent_tag: Option<u32>,
         val: char,
         tag: u32,
+        line_hint: usize,
     ) -> Self {
         IdeAdd {
             file_path: file_path,
-            parent_row: parent_row,
-            parent_col: parent_col,
+            parent_id: parent_id,
+            parent_peer: parent_peer,
+            parent_tag: parent_tag,
             val: val,
             tag: tag,
+            line_hint: line_hint,
         }
     }
 }

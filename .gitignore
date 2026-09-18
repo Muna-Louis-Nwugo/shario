@@ -31,4 +31,8 @@ target
 # runtime debug logs (see main.rs tracing setup)
 shar*.log
 
+# bench/'s vendored JS deps (socket.io-client etc.) -- installed via
+# `npm install` in bench/, not checked in
+bench/node_modules/
+
 

@@ -4,7 +4,7 @@
 use crate::shar::core::tree::SharDirectory;
 use crate::shar::prelude::*;
 use crate::types::{CrdtRelation, IdeAdd, IdeAddConfirmed, NetworkAdd, NetworkOp, Remove};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::pin::Pin;
 
@@ -20,10 +20,24 @@ type BoxedFun = Pin<Box<dyn Future<Output = ()> + Send>>;
 /// Owns the tree for one shar session and mediates every read/write to it.
 #[derive(Default)]
 pub struct SharQueue {
-    /// IDE adds waiting on a parent that hasn't arrived yet.
-    ide_backlog: HashMap<(usize, usize), Vec<IdeAdd>>,
+    /// IDE adds waiting on a parent identity that hasn't landed in the tree yet.
+    ide_backlog: HashMap<(IdSize, PeerIdSize), Vec<IdeAdd>>,
+    /// IDE adds waiting on a parent *tag* that hasn't been registered yet --
+    /// scheduling-order jitter only (the parent was sent first, but its own
+    /// `add_ide_operation` call hasn't run yet), not a real dependency wait.
+    ide_tag_backlog: HashMap<u32, Vec<IdeAdd>>,
     /// network operations waiting on a target that hasn't arrived yet.
     network_backlog: HashMap<(IdSize, PeerIdSize), Vec<NetworkOp>>,
+
+    ide_worklist: VecDeque<IdeAdd>,
+    network_worklist: VecDeque<NetworkOp>,
+    /// Every IDE-originated tag's real, already-assigned identity. Populated
+    /// the instant an `IdeAdd` is received, independent of whether it's been
+    /// inserted into the tree yet -- this is what makes confirmation
+    /// immediate and makes "delete something before its own add is applied"
+    /// safe: the identity always exists once assigned, even if the tree
+    /// insertion is still backlogged.
+    tag_identities: HashMap<u32, (IdSize, PeerIdSize)>,
     /// This replica's peer id.
     peer: PeerIdSize,
     tree: SharDirectory,
@@ -34,8 +48,12 @@ pub struct SharQueue {
     pub network_add_callback: Option<Box<dyn Fn(usize, usize) -> BoxedFun + Send + Sync>>,
     /// Called with `(row, col, was_line_merge)` when a remove is applied.
     pub network_remove_callback: Option<Box<dyn Fn(usize, usize) -> BoxedFun + Send + Sync>>,
-    pub ide_add_callback:
-        Option<Box<dyn Fn(NetworkAdd, IdeAddConfirmed) -> BoxedFun + Send + Sync>>,
+    /// Called the instant an IDE add's identity is assigned -- not gated on
+    /// tree insertion, so it's always immediate.
+    pub ide_add_confirm_callback: Option<Box<dyn Fn(IdeAddConfirmed) -> BoxedFun + Send + Sync>>,
+    /// Called once an IDE add is actually inserted into the tree, to
+    /// broadcast it to other peers.
+    pub ide_add_callback: Option<Box<dyn Fn(NetworkAdd) -> BoxedFun + Send + Sync>>,
     pub ide_remove_callback: Option<Box<dyn Fn(Remove) -> BoxedFun + Send + Sync>>,
 }
 
@@ -50,7 +68,8 @@ impl SharQueue {
         this_peer_id: PeerIdSize,
         network_add_callback: Box<dyn Fn(usize, usize) -> BoxedFun + Send + Sync>,
         network_remove_callback: Box<dyn Fn(usize, usize) -> BoxedFun + Send + Sync>,
-        ide_add_callback: Box<dyn Fn(NetworkAdd, IdeAddConfirmed) -> BoxedFun + Send + Sync>,
+        ide_add_confirm_callback: Box<dyn Fn(IdeAddConfirmed) -> BoxedFun + Send + Sync>,
+        ide_add_callback: Box<dyn Fn(NetworkAdd) -> BoxedFun + Send + Sync>,
         ide_remove_callback: Box<dyn Fn(Remove) -> BoxedFun + Send + Sync>,
     ) -> Result<Self> {
         let mut counter: u32 = 0;
@@ -58,12 +77,17 @@ impl SharQueue {
         /* create a new shar queue*/
         let queue = SharQueue {
             ide_backlog: HashMap::new(),
+            ide_tag_backlog: HashMap::new(),
             network_backlog: HashMap::new(),
+            ide_worklist: VecDeque::new(),
+            network_worklist: VecDeque::new(),
+            tag_identities: HashMap::new(),
             peer: this_peer_id,
             counter: counter,
             tree: tree,
             network_add_callback: Some(network_add_callback),
             network_remove_callback: Some(network_remove_callback),
+            ide_add_confirm_callback: Some(ide_add_confirm_callback),
             ide_add_callback: Some(ide_add_callback),
             ide_remove_callback: Some(ide_remove_callback),
         };
@@ -77,85 +101,103 @@ impl SharQueue {
         self.tree.identities()
     }
 
-    /// Applies a locally-typed character and returns the `NetworkAdd` to
-    /// send to peers. `start_line` resolves the parent via the line's
-    /// start-of-line anchor instead of `(paren:willt_row, parent_col)`.
+    /// Applies a locally-typed character. Assigns its real `(id, peer)` and
+    /// confirms immediately -- before its parent has necessarily resolved at
+    /// all -- so a delete of this character can never end up waiting on a
+    /// confirmation that depends on the whole parent chain landing first.
+    /// The actual tree insertion (and any further backlogging that needs)
+    /// happens in [`Self::add_ide_operation_inner`].
     pub async fn add_ide_operation(&mut self, op: IdeAdd) -> Result<()> {
-        tracing::debug!(?op, "add_ide_operation called");
-        let op_clone = op.clone();
-        let file_path = op_clone.file_path;
-        let parent_row = op_clone.parent_row;
-        let parent_col = op_clone.parent_col;
-        let val = op_clone.val;
-        let tag = op_clone.tag;
+        self.counter += 1;
+        let id = self.counter;
+        let peer = self.peer;
+        self.tag_identities.insert(op.tag, (id, peer));
 
-        // find the parent id
+        (self.ide_add_confirm_callback.as_ref().unwrap())(IdeAddConfirmed::new(op.tag, id, peer))
+            .await;
 
-        let parent_id_peer = self.tree.get_id_peer(&file_path, (parent_row, parent_col));
+        // this tag becoming known might be exactly what something else in
+        // ide_tag_backlog was waiting on
+        if let Some(waiting) = self.ide_tag_backlog.remove(&op.tag) {
+            self.ide_worklist.extend(waiting);
+        }
 
-        match parent_id_peer {
-            Ok(parent) => {
-                if let Some(parent_real) = parent {
-                    self.counter += 1;
-                    let relation = CrdtRelation::new(val, parent_real.0, parent_real.1);
-                    let crdt = CRDT::new(self.counter, self.peer, relation);
-                    let network_op = NetworkAdd::new(file_path.clone(), crdt.clone(), parent_row);
-                    let return_op = IdeAddConfirmed::new(tag, self.counter, self.peer);
+        self.add_ide_operation_inner(op, false).await?;
+        self.drain_ide_worklist().await;
 
-                    let add = self.tree.add_crdt(&file_path, parent_row, crdt);
+        Ok(())
+    }
 
-                    match add {
-                        Ok(add) => {
-                            if let Some(pos) = add {
-                                tracing::debug!(
-                                    row = pos.0,
-                                    col = pos.1,
-                                    "add_ide_operation resolved position, clearing dependants"
-                                );
-                                self.clear_ide_backlog(pos.0, pos.1).await;
-                                (self.ide_add_callback.as_ref().unwrap())(network_op, return_op)
-                                    .await;
-                                Ok(())
-                            } else {
-                                tracing::debug!(
-                                    "add_ide_operation was a no-op, likely already added"
-                                );
-                                Ok(())
-                            }
-                        }
+    /// Resolves `op`'s parent -- by identity, or by tag if the parent is this
+    /// same connection's own not-yet-confirmed add -- and attempts the tree
+    /// insertion. Backlogs `op`, by parent tag or by parent identity, if
+    /// either isn't ready yet.
+    ///
+    /// `clearing_worklist` is `true` only when called from within
+    /// [`Self::drain_ide_worklist`]'s own loop, so a resolved dependant gets
+    /// queued onto `ide_worklist` instead of recursing back into
+    /// [`Self::clear_ide_backlog`] -- mirrors
+    /// [`Self::add_network_operation_inner`]'s flag exactly, and for the
+    /// same reason: without it, a long backlog chain recurses one stack
+    /// frame per resolved link instead of looping.
+    async fn add_ide_operation_inner(&mut self, op: IdeAdd, clearing_worklist: bool) -> Result<()> {
+        tracing::debug!(?op, "add_ide_operation_inner called");
 
-                        Err(e) => Err(Error::Generic(String::from(format!(
-                            "Something went wrong: {e}"
-                        )))),
+        let parent = if let (Some(id), Some(peer)) = (op.parent_id, op.parent_peer) {
+            Some((id, peer))
+        } else if let Some(parent_tag) = op.parent_tag {
+            self.tag_identities.get(&parent_tag).copied()
+        } else {
+            None
+        };
+
+        let Some((parent_id, parent_peer)) = parent else {
+            let parent_tag = op
+                .parent_tag
+                .expect("an IdeAdd must carry parent_id/parent_peer or parent_tag");
+            tracing::debug!(
+                parent_tag,
+                "add_ide_operation_inner backlogged, parent tag not seen yet"
+            );
+            self.ide_tag_backlog
+                .entry(parent_tag)
+                .or_insert_with(Vec::new)
+                .push(op);
+            return Ok(());
+        };
+
+        let (id, peer) = *self.tag_identities.get(&op.tag).expect(
+            "add_ide_operation always assigns and registers an identity before this ever runs",
+        );
+
+        let relation = CrdtRelation::new(op.val, parent_id, parent_peer);
+        let crdt = CRDT::new(id, peer, relation);
+        // op.line_hint is only a ring-search starting point, unrelated to
+        // parent resolution -- can be stale without costing correctness.
+
+        match self.tree.add_crdt(&op.file_path, op.line_hint, crdt) {
+            Ok(Some(pos)) => {
+                if clearing_worklist {
+                    if let Some(backlogged) = self.ide_backlog.remove(&(id, peer)) {
+                        self.ide_worklist.extend(backlogged);
                     }
                 } else {
-                    tracing::debug!(
-                        parent_row,
-                        parent_col,
-                        "add_ide_operation backlogged, parent not found yet"
-                    );
-                    if let Some(backlogged) = self.ide_backlog.get_mut(&(parent_row, parent_col)) {
-                        backlogged.push(op);
-                    } else {
-                        let _ = self.ide_backlog.insert((parent_row, parent_col), vec![op]);
-                    }
-
-                    Ok(())
+                    self.clear_ide_backlog(id, peer).await;
                 }
+                let network_op = NetworkAdd::new(op.file_path.clone(), crdt.clone(), pos.0);
+                (self.ide_add_callback.as_ref().unwrap())(network_op).await;
+                Ok(())
             }
-
-            Err(_e) => {
-                tracing::debug!(
-                    parent_row,
-                    parent_col,
-                    "add_ide_operation backlogged, parent not found yet"
-                );
-                if let Some(backlogged) = self.ide_backlog.get_mut(&(parent_row, parent_col)) {
-                    backlogged.push(op);
-                } else {
-                    let _ = self.ide_backlog.insert((parent_row, parent_col), vec![op]);
-                }
-
+            Ok(None) => {
+                tracing::debug!("add_ide_operation_inner was a no-op, likely already added");
+                Ok(())
+            }
+            Err(e) => {
+                tracing::debug!(error = %e, "add_ide_operation_inner backlogged, parent not in the tree yet");
+                self.ide_backlog
+                    .entry((parent_id, parent_peer))
+                    .or_insert_with(Vec::new)
+                    .push(op);
                 Ok(())
             }
         }
@@ -178,6 +220,14 @@ impl SharQueue {
     /// Panics if `network_add_callback` is `None` — only possible if this `SharQueue`
     /// wasn't built via [`Self::new`].
     pub async fn add_network_operation(&mut self, op: NetworkAdd) {
+        self.add_network_operation_inner(op, false).await
+    }
+
+    /// `clearing_worklist` is `true` only when called from within
+    /// [`Self::clear_network_backlog`]'s own drain loop, so a resolved
+    /// dependant gets queued onto `network_worklist` instead of recursing
+    /// back into `clear_network_backlog` itself.
+    async fn add_network_operation_inner(&mut self, op: NetworkAdd, clearing_worklist: bool) {
         tracing::debug!(?op, "add_network_operation called");
         let crdt = op.crdt;
         let row = op.row;
@@ -196,7 +246,14 @@ impl SharQueue {
                     );
                     (self.network_add_callback.as_ref().unwrap())(position.0, position.1).await;
 
-                    self.clear_network_backlog(crdt.id, crdt.peer).await;
+                    if clearing_worklist {
+                        if let Some(backlogged) = self.network_backlog.remove(&(crdt.id, crdt.peer))
+                        {
+                            self.network_worklist.extend(backlogged);
+                        }
+                    } else {
+                        self.clear_network_backlog(crdt.id, crdt.peer).await;
+                    }
                 } else {
                     tracing::debug!("add_network_operation was a no-op, likely already added");
                     return;
@@ -280,10 +337,13 @@ impl SharQueue {
         let dependancies = self.network_backlog.remove(&(id, peer));
 
         if let Some(list) = dependancies {
-            for item in list {
+            self.network_worklist.append(&mut VecDeque::from(list));
+
+            while !self.network_worklist.is_empty() {
+                let item = self.network_worklist.pop_front().unwrap();
                 match item {
                     NetworkOp::ADD(op) => {
-                        Box::pin(self.add_network_operation(op)).await;
+                        Box::pin(self.add_network_operation_inner(op, true)).await;
                     }
 
                     NetworkOp::REMOVE(op) => {
@@ -297,17 +357,27 @@ impl SharQueue {
         }
     }
 
-    async fn clear_ide_backlog(&mut self, row: usize, col: usize) {
+    async fn clear_ide_backlog(&mut self, id: IdSize, peer: PeerIdSize) {
         // get the list of dependancies
-        let dependancies = self.ide_backlog.remove(&(row, col));
+        let dependancies = self.ide_backlog.remove(&(id, peer));
 
         if let Some(list) = dependancies {
-            for item in list {
-                Box::pin(self.add_ide_operation(item)).await;
-            }
+            self.ide_worklist.extend(list);
+            self.drain_ide_worklist().await;
         } else {
             // there's no dependancy list therefore nothing to do
             return;
+        }
+    }
+
+    /// Drains `ide_worklist` until empty, retrying each item's tree insertion.
+    /// Shared by [`Self::add_ide_operation`] (for anything a newly-registered
+    /// tag unblocked) and [`Self::clear_ide_backlog`] (for anything a newly-
+    /// inserted identity unblocked) -- both just push onto the same queue.
+    async fn drain_ide_worklist(&mut self) {
+        while !self.ide_worklist.is_empty() {
+            let item = self.ide_worklist.pop_front().unwrap();
+            let _ = Box::pin(self.add_ide_operation_inner(item, true)).await;
         }
     }
 }

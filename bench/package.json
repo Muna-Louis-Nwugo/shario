@@ -1,0 +1,9 @@
+{
+  "name": "shario-bench",
+  "private": true,
+  "version": "0.0.1",
+  "description": "Load/perf harness that drives the real shario server over a real socket",
+  "dependencies": {
+    "socket.io-client": "^4.0.0"
+  }
+}

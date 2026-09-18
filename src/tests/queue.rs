@@ -12,14 +12,16 @@ use std::path::PathBuf;
 thread_local! {
     static ADD_CALLS: RefCell<Vec<(usize, usize)>> = RefCell::new(Vec::new());
     static REMOVE_CALLS: RefCell<Vec<(usize, usize)>> = RefCell::new(Vec::new());
-    static IDE_ADD_CALLS: RefCell<Vec<(NetworkAdd, u32, IdSize, PeerIdSize)>> = RefCell::new(Vec::new());
+    static IDE_ADD_CONFIRM_CALLS: RefCell<Vec<(u32, IdSize, PeerIdSize)>> = RefCell::new(Vec::new());
+    static IDE_ADD_BROADCAST_CALLS: RefCell<Vec<NetworkAdd>> = RefCell::new(Vec::new());
     static IDE_REMOVE_CALLS: RefCell<Vec<Remove>> = RefCell::new(Vec::new());
 }
 
 fn reset_calls() {
     ADD_CALLS.with(|c| c.borrow_mut().clear());
     REMOVE_CALLS.with(|c| c.borrow_mut().clear());
-    IDE_ADD_CALLS.with(|c| c.borrow_mut().clear());
+    IDE_ADD_CONFIRM_CALLS.with(|c| c.borrow_mut().clear());
+    IDE_ADD_BROADCAST_CALLS.with(|c| c.borrow_mut().clear());
     IDE_REMOVE_CALLS.with(|c| c.borrow_mut().clear());
 }
 
@@ -31,11 +33,12 @@ async fn record_remove(row: usize, col: usize) {
     REMOVE_CALLS.with(|c| c.borrow_mut().push((row, col)));
 }
 
-async fn record_ide_add(op: NetworkAdd, confirmed: IdeAddConfirmed) {
-    IDE_ADD_CALLS.with(|c| {
-        c.borrow_mut()
-            .push((op, confirmed.tag, confirmed.id, confirmed.peer))
-    });
+async fn record_ide_add_confirm(confirmed: IdeAddConfirmed) {
+    IDE_ADD_CONFIRM_CALLS.with(|c| c.borrow_mut().push((confirmed.tag, confirmed.id, confirmed.peer)));
+}
+
+async fn record_ide_add(op: NetworkAdd) {
+    IDE_ADD_BROADCAST_CALLS.with(|c| c.borrow_mut().push(op));
 }
 
 async fn record_ide_remove(op: Remove) {
@@ -50,8 +53,12 @@ fn remove_calls() -> Vec<(usize, usize)> {
     REMOVE_CALLS.with(|c| c.borrow().clone())
 }
 
-fn ide_add_calls() -> Vec<(NetworkAdd, u32, IdSize, PeerIdSize)> {
-    IDE_ADD_CALLS.with(|c| c.borrow().clone())
+fn ide_add_confirm_calls() -> Vec<(u32, IdSize, PeerIdSize)> {
+    IDE_ADD_CONFIRM_CALLS.with(|c| c.borrow().clone())
+}
+
+fn ide_add_broadcast_calls() -> Vec<NetworkAdd> {
+    IDE_ADD_BROADCAST_CALLS.with(|c| c.borrow().clone())
 }
 
 fn ide_remove_calls() -> Vec<Remove> {
@@ -72,7 +79,8 @@ fn setup(dir_name: &str, content: &str) -> (SharQueue, PathBuf) {
         0,
         Box::new(|row, col| Box::pin(record_add(row, col))),
         Box::new(|row, col| Box::pin(record_remove(row, col))),
-        Box::new(|op, confirmed| Box::pin(record_ide_add(op, confirmed))),
+        Box::new(|confirmed| Box::pin(record_ide_add_confirm(confirmed))),
+        Box::new(|op| Box::pin(record_ide_add(op))),
         Box::new(|op| Box::pin(record_ide_remove(op))),
     )
     .expect("failed to load queue");
@@ -89,47 +97,92 @@ fn teardown(dir_name: &str) {
 async fn add_ide_operation_applies_and_fires_callback() {
     let (mut queue, file_path) = setup("scratch_queue_add_ide", "ab");
 
-    // index 0 of line 0 is now the root sentinel, not 'a' -- 'a' is at (0,1), 'b' at
-    // (0,2) -- insert after 'b'
+    // content "ab" loads as: sentinel (0,0), 'a' -> id 1, 'b' -> id 2, all peer 0 --
+    // parent 'c' directly on 'b's already-known identity
     queue
-        .add_ide_operation(IdeAdd::new(file_path.clone(), 0, 2, 'c', 42))
+        .add_ide_operation(IdeAdd::new(file_path.clone(), Some(2), Some(0), None, 'c', 42, 0))
         .await
         .expect("failed to add via the ide path");
 
-    let calls = ide_add_calls();
-    assert_eq!(calls.len(), 1, "ide_add_callback should have fired once");
-    let (op, tag, id, peer) = calls[0].clone();
+    let confirms = ide_add_confirm_calls();
+    assert_eq!(confirms.len(), 1, "the add should have been confirmed immediately");
+    let (confirmed_tag, c_id, c_peer) = confirms[0];
+    assert_eq!(confirmed_tag, 42, "the confirmation should echo back the tag it was sent");
+
+    let broadcasts = ide_add_broadcast_calls();
+    assert_eq!(broadcasts.len(), 1, "ide_add_callback should have fired once, once actually inserted");
+    let op = broadcasts[0].clone();
     assert_eq!(op.file_path, file_path);
     assert_eq!(op.crdt.relation.value, 'c');
-    assert_eq!(op.row, 0);
-    assert_eq!(tag, 42, "the confirmation should echo back the tag it was sent");
     assert_eq!(
-        (id, peer),
         (op.crdt.id, op.crdt.peer),
-        "the confirmation should carry the crdt's real (id, peer)"
+        (c_id, c_peer),
+        "the broadcast's identity should match what was confirmed"
     );
 
-    // applied synchronously: 'c' should now be sitting at (0, 3), so a follow-up
-    // insert anchored there should resolve its parent to exactly this op's crdt --
-    // that's only possible if 'c' really landed where it was supposed to
+    // 'd' parents directly on 'c' by its now-known, confirmed identity
     queue
-        .add_ide_operation(IdeAdd::new(file_path.clone(), 0, 3, 'd', 43))
+        .add_ide_operation(IdeAdd::new(file_path.clone(), Some(c_id), Some(c_peer), None, 'd', 43, 0))
         .await
         .expect("failed to add follow-up character");
 
-    let calls = ide_add_calls();
-    assert_eq!(calls.len(), 2, "ide_add_callback should have fired twice");
-    let follow_up = calls[1].0.clone();
+    let broadcasts = ide_add_broadcast_calls();
+    assert_eq!(broadcasts.len(), 2, "ide_add_callback should have fired twice");
+    let follow_up = broadcasts[1].clone();
     assert_eq!(
-        (
-            follow_up.crdt.relation.parent_id,
-            follow_up.crdt.relation.parent_peer
-        ),
-        (op.crdt.id, op.crdt.peer),
-        "'d' should have parented on 'c', proving 'c' really landed at (0,3)"
+        (follow_up.crdt.relation.parent_id, follow_up.crdt.relation.parent_peer),
+        (c_id, c_peer),
+        "'d' should have parented on 'c'"
     );
 
     teardown("scratch_queue_add_ide");
+}
+
+#[tokio::test]
+async fn add_ide_operation_confirms_before_its_parent_tag_resolves() {
+    // regression test for the whole point of this redesign: confirming a
+    // character must not wait on its parent chain resolving at all -- here
+    // the parent is referenced by tag (not yet confirmed itself), and the
+    // child must still get its own, immediate confirmation.
+    let (mut queue, file_path) = setup("scratch_queue_add_ide_tag", "a");
+
+    // 'b' parents on tag 100, which nothing has sent yet -- backlogged, but
+    // still gets its own identity + confirmation right away
+    queue
+        .add_ide_operation(IdeAdd::new(file_path.clone(), None, None, Some(100), 'b', 7, 0))
+        .await
+        .expect("failed to add 'b'");
+
+    assert_eq!(
+        ide_add_confirm_calls().len(),
+        1,
+        "'b' should be confirmed immediately even though its parent tag hasn't resolved"
+    );
+    assert_eq!(
+        ide_add_broadcast_calls().len(),
+        0,
+        "'b' shouldn't be inserted into the tree yet -- its parent doesn't exist"
+    );
+
+    // now the parent itself arrives, using tag 100 as promised, parented on
+    // the sentinel (0, 0) -- this should resolve 'b' too, transitively
+    queue
+        .add_ide_operation(IdeAdd::new(file_path.clone(), Some(0), Some(0), None, 'x', 100, 0))
+        .await
+        .expect("failed to add the promised parent");
+
+    assert_eq!(
+        ide_add_confirm_calls().len(),
+        2,
+        "the parent should also be confirmed immediately"
+    );
+    assert_eq!(
+        ide_add_broadcast_calls().len(),
+        2,
+        "both the parent and 'b' should now be inserted and broadcast"
+    );
+
+    teardown("scratch_queue_add_ide_tag");
 }
 
 #[tokio::test]

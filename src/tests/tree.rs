@@ -188,6 +188,90 @@ fn test_convergence() {
 }
 
 #[test]
+fn test_convergence_removes() {
+    // three replicas, same starting content: "abc\ndef\nghi" -- ids assigned in
+    // char order by add_file: a=1,b=2,c=3, \n=4 (line 1's anchor), d=5,e=6,f=7,
+    // \n=8 (line 2's anchor), g=9,h=10,i=11 (last line, no trailing newline)
+    let path_a = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scratch_convergence_removes_a.txt");
+    let path_b = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scratch_convergence_removes_b.txt");
+    let path_c = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scratch_convergence_removes_c.txt");
+
+    let content = "abc\ndef\nghi";
+    std::fs::write(&path_a, content).expect("failed to write scratch file a");
+    std::fs::write(&path_b, content).expect("failed to write scratch file b");
+    std::fs::write(&path_c, content).expect("failed to write scratch file c");
+
+    let mut counter_a = 0;
+    let mut counter_b = 0;
+    let mut counter_c = 0;
+    let mut replica_a =
+        SharFile::new(path_a.clone(), &mut counter_a).expect("failed to load replica a");
+    let mut replica_b =
+        SharFile::new(path_b.clone(), &mut counter_b).expect("failed to load replica b");
+    let mut replica_c =
+        SharFile::new(path_c.clone(), &mut counter_c).expect("failed to load replica c");
+
+    // three unrelated removes: an ordinary character ('b', id 2), the newline that
+    // merges lines 0 and 1 (id 4 -- a line-anchor removal, the risky case since it
+    // reshapes the projection instead of just tombstoning in place), and an
+    // ordinary character on the untouched third line ('g', id 9). line_num is
+    // deliberately always 0 -- a wrong hint for two of these three -- since
+    // find_crdt/the is_line ring search is supposed to find the real target by
+    // (id, peer) regardless of how far off the hint is, and regardless of how the
+    // earlier removes in this same batch have already reshaped the projection.
+    //
+    // replica_a removes them in one order...
+    replica_a.remove_crdt(0, 2, 0).expect("a: failed to remove 'b'");
+    replica_a
+        .remove_crdt(0, 4, 0)
+        .expect("a: failed to remove the first newline");
+    replica_a.remove_crdt(0, 9, 0).expect("a: failed to remove 'g'");
+
+    // ...replica_b removes them in the reverse order...
+    replica_b.remove_crdt(0, 9, 0).expect("b: failed to remove 'g'");
+    replica_b
+        .remove_crdt(0, 4, 0)
+        .expect("b: failed to remove the first newline");
+    replica_b.remove_crdt(0, 2, 0).expect("b: failed to remove 'b'");
+
+    // ...and replica_c removes them in yet another order
+    replica_c
+        .remove_crdt(0, 4, 0)
+        .expect("c: failed to remove the first newline");
+    replica_c.remove_crdt(0, 9, 0).expect("c: failed to remove 'g'");
+    replica_c.remove_crdt(0, 2, 0).expect("c: failed to remove 'b'");
+
+    assert_eq!(
+        replica_a, replica_b,
+        "replica a and b diverged after removing the same targets in different orders"
+    );
+    assert_eq!(
+        replica_b, replica_c,
+        "replica b and c diverged after removing the same targets in different orders"
+    );
+
+    // confirm the converged shape is actually correct, not just mutually
+    // agreed-upon: line 0 should be the sentinel + 'a','c' (b removed) + 'd','e','f'
+    // folded up from the merged line 1, i.e. "acdef"; line 1 (formerly line 2)
+    // should be its own anchor + 'h','i' ('g' removed), i.e. "hi"
+    assert_eq!(replica_a.get_id_peer((0, 0)), Some((0, 0)), "root sentinel");
+    assert_eq!(replica_a.get_id_peer((0, 1)), Some((1, 0)), "'a'");
+    assert_eq!(replica_a.get_id_peer((0, 2)), Some((3, 0)), "'c'");
+    assert_eq!(replica_a.get_id_peer((0, 3)), Some((5, 0)), "'d' folded up from the merged line");
+    assert_eq!(replica_a.get_id_peer((0, 4)), Some((6, 0)), "'e'");
+    assert_eq!(replica_a.get_id_peer((0, 5)), Some((7, 0)), "'f'");
+    assert_eq!(replica_a.get_id_peer((0, 6)), None, "line 0 should have exactly 6 entries");
+    assert_eq!(replica_a.get_id_peer((1, 0)), Some((8, 0)), "line 2's own anchor, now at row 1");
+    assert_eq!(replica_a.get_id_peer((1, 1)), Some((10, 0)), "'h'");
+    assert_eq!(replica_a.get_id_peer((1, 2)), Some((11, 0)), "'i'");
+    assert_eq!(replica_a.get_id_peer((2, 0)), None, "only 2 lines should remain after the merge");
+
+    std::fs::remove_file(&path_a).expect("failed to delete scratch file a");
+    std::fs::remove_file(&path_b).expect("failed to delete scratch file b");
+    std::fs::remove_file(&path_c).expect("failed to delete scratch file c");
+}
+
+#[test]
 fn test_get_id_peer() {
     let file_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scratch_get_id_peer.txt");
     // four lines of 9 characters each (except the last), no trailing newline

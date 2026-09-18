@@ -136,14 +136,29 @@ impl SharFile {
 
     /// Finds `(id, peer)`'s current position, ring-searching outward from
     /// `line_num` (a hint, not ground truth) until it's found.
-    fn find_crdt(&self, line_num: usize, id: IdSize, peer: PeerIdSize) -> Result<(usize, usize)> {
+    fn find_crdt(
+        &self,
+        mut line_num: usize,
+        id: IdSize,
+        peer: PeerIdSize,
+    ) -> Result<(usize, usize)> {
         // nothing has been added yet, so there's nothing to search for — this must be the root
         // sentinel parent of the very first character
         if (id, peer) == (0, 0) {
             return Ok((0, 0));
         }
 
-        let line = &self.projection[line_num];
+        let line;
+
+        if let Some(line_found) = self.projection.get(line_num) {
+            line = line_found;
+        } else {
+            line_num = 0;
+            line = self
+                .projection
+                .get(line_num)
+                .expect("Row 0 should always exist");
+        };
 
         if let Some(index) = line.iter().position(|&item| item == (id, peer)) {
             Ok((line_num, index))
@@ -459,8 +474,17 @@ impl SharFile {
 
         // check if this is one of the line
         if is_line {
+            // line_num is only a hint, and an anchor's hint can go stale in a way an
+            // ordinary character's can't tolerate here: this branch (unlike the
+            // ordinary path below) has no ring search of its own, so ring-search for
+            // the anchor's actual current row first via find_crdt
+            let actual_row = match self.find_crdt(line_num, id, peer) {
+                Ok((row, _col)) => row,
+                Err(_e) => return Err(Error::Generic(String::from("anchor not found"))),
+            };
+
             // fix the projection
-            let to_be_deleted = self.projection.get(line_num);
+            let to_be_deleted = self.projection.get(actual_row);
 
             match to_be_deleted {
                 Some(old_line) => {
@@ -472,11 +496,11 @@ impl SharFile {
                     // append deleted line to line above it
                     // REMEMBER at the IDE level, you are unable to remove the sentinel character, so
                     // this won't break in that case since that case never arrives
-                    self.projection[line_num - 1].append(&mut old_line_copy);
+                    self.projection[actual_row - 1].append(&mut old_line_copy);
 
                     // delete the line
-                    self.projection.remove(line_num);
-                    return Ok(Some((line_num, 0)));
+                    self.projection.remove(actual_row);
+                    return Ok(Some((actual_row, 0)));
                 }
 
                 None => {

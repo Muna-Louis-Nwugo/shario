@@ -6,6 +6,32 @@ use std::fmt;
 use crate::shar::prelude::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Diagnostic: how far `find_crdt`'s ring search has had to travel from its hint,
+/// cumulative across every call in this process. Ring-search cost scales linearly
+/// with this distance (measured separately, see `shario_perf_findings`), so this is
+/// how we check whether out-of-order processing under a burst is pushing hints far
+/// from their real position, rather than guessing.
+static RING_SEARCH_CALLS: AtomicU64 = AtomicU64::new(0);
+static RING_SEARCH_TOTAL_DISTANCE: AtomicU64 = AtomicU64::new(0);
+static RING_SEARCH_MAX_DISTANCE: AtomicU64 = AtomicU64::new(0);
+
+fn record_ring_search_distance(distance: usize) {
+    RING_SEARCH_CALLS.fetch_add(1, Ordering::Relaxed);
+    RING_SEARCH_TOTAL_DISTANCE.fetch_add(distance as u64, Ordering::Relaxed);
+    RING_SEARCH_MAX_DISTANCE.fetch_max(distance as u64, Ordering::Relaxed);
+}
+
+/// `(calls, total_distance, max_distance)` across every `find_crdt` call so far in
+/// this process. `total_distance / calls` is the mean ring-search distance.
+pub fn ring_search_diagnostics() -> (u64, u64, u64) {
+    (
+        RING_SEARCH_CALLS.load(Ordering::Relaxed),
+        RING_SEARCH_TOTAL_DISTANCE.load(Ordering::Relaxed),
+        RING_SEARCH_MAX_DISTANCE.load(Ordering::Relaxed),
+    )
+}
 
 /// Characters that end a projection line rather than occupying a column in one.
 fn is_line_break(c: char) -> bool {
@@ -164,6 +190,7 @@ impl SharFile {
         };
 
         if let Some(index) = line.iter().position(|&item| item == (id, peer)) {
+            record_ring_search_distance(0);
             Ok((line_num, index))
         } else {
             let mut up_offset = 1;
@@ -201,7 +228,10 @@ impl SharFile {
 
             while up_exhausted != true || down_exhausted != true {
                 match check_up() {
-                    Ok((row, col)) => return Ok((row, col)),
+                    Ok((row, col)) => {
+                        record_ring_search_distance(line_num - row);
+                        return Ok((row, col));
+                    }
 
                     Err(e) => {
                         if e == Error::OutOfBounds(String::from("up exhausted")) {
@@ -211,7 +241,10 @@ impl SharFile {
                 }
 
                 match check_down() {
-                    Ok((row, col)) => return Ok((row, col)),
+                    Ok((row, col)) => {
+                        record_ring_search_distance(row - line_num);
+                        return Ok((row, col));
+                    }
 
                     Err(e) => {
                         if e == Error::OutOfBounds(String::from("down exhausted")) {

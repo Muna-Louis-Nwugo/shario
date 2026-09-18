@@ -1,21 +1,23 @@
 # Shar — Benchmark log
 
-Socket: `node bench/trace-runner.js <trace.json.gz>` — real socket.io client against the release binary. Internal: `./target/release/shario --bench-internal <trace.json>` — same trace replayed directly against `SharQueue`, no socket.
+Socket: `node bench/trace-runner.js <trace.json.gz>` — real socket.io client against the release binary. Internal: `./target/release/shario --bench-internal <trace.json>` — same trace replayed directly against `SharQueue`, no socket. "RSS growth" is peak minus idle RSS for that run (isolates what the run itself added, not what was already resident).
 
 ## 2026-09-18
 
-Fixed: `IdeAdd` parent resolution (identity/tag-based instead of position-based), a `tree.rs` panic on a stale remove hint, and `main.rs` silently dropping `ide-add-confirmed` under `InternalChannelFull` (now retries instead of dropping). An earlier automerge-paper socket run showed multi-second latencies/160MB RSS -- traced to the dev machine's own memory pressure (swap in use), not shario: gone after a restart, and the internal (no-socket) benchmark never reproduced it even during the bad run.
+Fixed: `IdeAdd` parent resolution (identity/tag-based instead of position-based), a `tree.rs` panic on a stale remove hint, and `main.rs` silently dropping `ide-add-confirmed` under `InternalChannelFull` (now retries instead of dropping).
+
+Socket-mode automerge-paper runs intermittently showed multi-second latencies. Confirmed cause (not memory pressure, that was a red herring): `find_crdt`'s ring-search cost scales linearly with hint distance, and socketioxide processes each socket event as an independent tokio task with no ordering guarantee -- under the wrong processing order, hints land far from the real position (measured mean ring-search distance ~281 and climbing vs. ~1.4 on a clean run). See `TODO.md`/`KNOWN_ISSUES.md`.
 
 ### Socket
 
-| trace | ops | result | total ms | ops/sec | min ms | p50 ms | p99 ms | max ms | peak RSS |
+| trace | ops | result | total ms | ops/sec | min ms | p50 ms | p99 ms | max ms | RSS growth |
 |---|---|---|---|---|---|---|---|---|---|
-| friendsforever_flat | 26,078 | PASS | 468.9 | 55,610 | 1.5 | 6.8 | 35.8 | 53.6 | 11.1 MB |
-| automerge-paper | 259,778 | PASS | 3,486.0 | 74,519 | 2.2 | 6.0 | 39.3 | 59.9 | 27.7 MB |
+| friendsforever_flat | 26,078 | PASS | 403.7 | 64,602 | 2.2 | 7.3 | 37.5 | 52.3 | 4.6 MB |
+| automerge-paper | 259,778 | PASS | 3,075.0 | 84,482 | 2.2 | 5.0 | 29.1 | 42.2 | 16.8 MB |
 
 ### Internal
 
-| trace | ops | result | total ms | ops/sec | min ms | p50 ms | p99 ms | max ms | peak RSS |
+| trace | ops | result | total ms | ops/sec | min ms | p50 ms | p99 ms | max ms | RSS growth |
 |---|---|---|---|---|---|---|---|---|---|
-| friendsforever_flat | 26,078 | PASS | 57.2 | 455,686 | 0.00065 | 0.0012 | 0.0035 | 1.2 | 12.6 MB |
-| automerge-paper | 259,778 | PASS | 736.2 | 352,850 | 0.00065 | 0.0015 | 0.0048 | 8.3 | 87.9 MB |
+| friendsforever_flat | 26,078 | PASS | 69.6 | 374,801 | 0.00064 | 0.0015 | 0.0029 | 1.0 | 2.0 MB |
+| automerge-paper | 259,778 | PASS | 569.7 | 456,011 | 0.00055 | 0.0012 | 0.0043 | 20.2 | 13.9 MB |

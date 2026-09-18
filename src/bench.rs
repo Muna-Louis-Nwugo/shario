@@ -8,6 +8,7 @@
 //! since this only reads plain JSON.
 
 use crate::shar::core::queue::SharQueue;
+use crate::shar::core::tree::ring_search_diagnostics;
 use crate::shar::prelude::{IdSize, PeerIdSize};
 use crate::types::{IdeAdd, IdeAddConfirmed, Remove};
 use serde::Deserialize;
@@ -244,6 +245,12 @@ pub async fn run(trace_path: &Path, label: &str) -> Result<(), Box<dyn std::erro
         "opsPerSec": (total_ops as f64) / (total_ms / 1000.0),
         "idleRssKb": idle_rss_kb,
         "peakRssKb": peak_rss_kb,
+        "peakRssGrowthKb": idle_rss_kb.zip(peak_rss_kb).map(|(idle, peak)| peak.saturating_sub(idle)),
+        "ringSearch": {
+            "calls": ring_search_diagnostics().0,
+            "totalDistance": ring_search_diagnostics().1,
+            "maxDistance": ring_search_diagnostics().2,
+        },
         "latencyMs": {
             "mean": mean_latency_ms,
             "min": latencies_ms.first(),

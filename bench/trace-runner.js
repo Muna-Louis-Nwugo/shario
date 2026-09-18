@@ -237,6 +237,7 @@ async function main() {
         opsPerSec,
         idleRssKb,
         peakRssKb,
+        peakRssGrowthKb: peakRssKb !== null && idleRssKb !== null ? peakRssKb - idleRssKb : null,
         finalRssKb,
         latencyMs: {
             mean: latenciesMs.reduce((a, b) => a + b, 0) / (latenciesMs.length || 1),

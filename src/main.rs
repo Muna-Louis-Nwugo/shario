@@ -173,6 +173,25 @@ async fn main() {
         .await
         .unwrap();
 
+    // Diagnostic: logs find_crdt's ring-search distance stats periodically, so a
+    // benchmark run's server-side log shows whether hints are landing far from their
+    // real position (see src/shar/core/tree.rs's ring_search_diagnostics).
+    tokio::spawn(async {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            let (calls, total_distance, max_distance) = shar::core::tree::ring_search_diagnostics();
+            if calls > 0 {
+                tracing::info!(
+                    calls,
+                    total_distance,
+                    max_distance,
+                    mean_distance = total_distance / calls,
+                    "ring-search diagnostics"
+                );
+            }
+        }
+    });
+
     axum::serve(listener, app).await.unwrap();
 }
 

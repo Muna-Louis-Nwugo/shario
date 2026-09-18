@@ -103,20 +103,23 @@ impl SharFile {
         coordinates: (usize, usize),
         id: IdSize,
         peer: PeerIdSize,
+        parent_real: bool,
     ) {
+        let offset = if parent_real { 1 } else { 0 };
+
         if self.projection[coordinates.0].is_empty() {
-            self.projection.insert(coordinates.0 + 1, Vec::new());
+            self.projection.insert(coordinates.0 + offset, Vec::new());
             let _ = self
                 .projection
-                .get_mut(coordinates.0 + 1)
+                .get_mut(coordinates.0 + offset)
                 .unwrap()
                 .push((id, peer));
             return;
         }
 
-        let mut new_line = self.projection[coordinates.0].split_off(coordinates.1 + 1);
+        let mut new_line = self.projection[coordinates.0].split_off(coordinates.1 + offset);
         new_line.insert(0, (id, peer));
-        self.projection.insert(coordinates.0 + 1, new_line);
+        self.projection.insert(coordinates.0 + offset, new_line);
     }
 
     /// Looks up the `(id, peer)` at `(line, column)`. `None` if out of bounds.
@@ -357,7 +360,7 @@ impl SharFile {
 
                 // if this is a new line, split the projection here instead of inserting a character
                 if is_line_break(relation.value) {
-                    self.add_line_to_projection(coordinates, id, peer);
+                    self.add_line_to_projection(coordinates, id, peer, parent_exists);
                     return Ok(Some((coordinates.0 + 1, 0)));
                 }
 

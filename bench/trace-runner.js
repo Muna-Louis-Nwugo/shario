@@ -5,6 +5,13 @@
 // throughput, add-confirmation latency, and server RSS over the run, and verifies the
 // final document text matches the trace's own recorded endContent.
 //
+// KNOWN GAP: this only checks the client-side mirror's text against endContent, which
+// is built independently of the server -- it proves the client's own local view stayed
+// self-consistent, not that the server's own tree/projection actually converged
+// correctly. A server-side panic can corrupt server state while this still reports a
+// match, since the client already applied its own edit and got a confirmation before
+// the server's tree insertion is even attempted.
+//
 // Usage: node trace-runner.js <path-to-trace.json[.gz]> [--label name]
 
 const fs = require('fs');

@@ -57,7 +57,9 @@ impl QueueWrap {
             this_peer_id,
             Box::new(move |row, col| Box::pin(network_add_callback(socket1.clone(), row, col))),
             Box::new(move |row, col| Box::pin(network_remove_callback(socket2.clone(), row, col))),
-            Box::new(move |op_return| Box::pin(ide_add_confirm_callback(socket3.clone(), op_return))),
+            Box::new(move |op_return| {
+                Box::pin(ide_add_confirm_callback(socket3.clone(), op_return))
+            }),
             Box::new(move |op_broadcast| Box::pin(ide_add_callback(socket4.clone(), op_broadcast))),
             Box::new(move |remove| Box::pin(ide_remove_callback(socket5.clone(), remove))),
         )?;
@@ -102,8 +104,13 @@ async fn main() {
     // with the normal startup path below.
     let args: Vec<String> = std::env::args().collect();
     if let Some(idx) = args.iter().position(|a| a == "--bench-internal") {
-        let trace_path = args.get(idx + 1).expect("--bench-internal requires a trace path");
-        let label = args.get(idx + 2).map(String::as_str).unwrap_or("bench-internal");
+        let trace_path = args
+            .get(idx + 1)
+            .expect("--bench-internal requires a trace path");
+        let label = args
+            .get(idx + 2)
+            .map(String::as_str)
+            .unwrap_or("bench-internal");
         if let Err(e) = bench::run(std::path::Path::new(trace_path), label).await {
             eprintln!("bench-internal failed: {e}");
             std::process::exit(1);
@@ -263,6 +270,10 @@ async fn ide_remove_callback(socket: SocketRef, op: Remove) {
     let _ = socket.within("network").emit("network-remove", &op).await;
 }
 
+/// Total retries across every `ide_add_confirm_callback` call this process has made --
+/// a diagnostic for how often/how badly the retry loop below actually engages.
+static CONFIRM_RETRY_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 async fn ide_add_confirm_callback(socket: SocketRef, op_return: IdeAddConfirmed) {
     tracing::debug!(?op_return, "add confirmed");
     loop {
@@ -273,7 +284,8 @@ async fn ide_add_confirm_callback(socket: SocketRef, op_return: IdeAddConfirmed)
         {
             Ok(_) => break,
             Err(e) => {
-                tracing::warn!(?op_return, error = %e, "ide-add-confirmed emit failed, retrying");
+                let total = CONFIRM_RETRY_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                tracing::warn!(?op_return, error = %e, total_retries = total, "ide-add-confirmed emit failed, retrying");
                 tokio::time::sleep(std::time::Duration::from_micros(1)).await;
             }
         }

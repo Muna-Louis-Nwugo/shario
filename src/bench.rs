@@ -246,6 +246,7 @@ pub async fn run(trace_path: &Path, label: &str) -> Result<(), Box<dyn std::erro
         "peakRssKb": peak_rss_kb,
         "latencyMs": {
             "mean": mean_latency_ms,
+            "min": latencies_ms.first(),
             "p50": percentile(&latencies_ms, 0.5),
             "p95": percentile(&latencies_ms, 0.95),
             "p99": percentile(&latencies_ms, 0.99),

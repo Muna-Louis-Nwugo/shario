@@ -233,6 +233,7 @@ async function main() {
         finalRssKb,
         latencyMs: {
             mean: latenciesMs.reduce((a, b) => a + b, 0) / (latenciesMs.length || 1),
+            min: latenciesMs[0] ?? null,
             p50: percentile(latenciesMs, 0.5),
             p95: percentile(latenciesMs, 0.95),
             p99: percentile(latenciesMs, 0.99),

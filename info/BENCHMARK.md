@@ -8,14 +8,14 @@ Fixed: `IdeAdd` parent resolution (identity/tag-based instead of position-based)
 
 ### Socket
 
-| trace | ops | result | ops/sec | p50 ms | p99 ms |
-|---|---|---|---|---|---|
-| friendsforever_flat | 26,078 | PASS | 57,201 | 5.9 | 23.7 |
-| automerge-paper | 259,778 | PASS | 66,076 | 6.2 | 18.7 |
+| trace | ops | result | total ms | ops/sec | min ms | p50 ms | p99 ms | max ms |
+|---|---|---|---|---|---|---|---|---|
+| friendsforever_flat | 26,078 | PASS | 468.9 | 55,610 | 1.5 | 6.8 | 35.8 | 53.6 |
+| automerge-paper | 259,778 | PASS | 3,862.2 | 67,262 | 3.0 | 6.2 | 18.1 | 61.7 |
 
 ### Internal
 
-| trace | ops | result | ops/sec | p50 ms | p99 ms |
-|---|---|---|---|---|---|
-| friendsforever_flat | 26,078 | PASS | 422,458 | 0.0013 | 0.0041 |
-| automerge-paper | 259,778 | PASS | 363,238 | 0.0015 | 0.0042 |
+| trace | ops | result | total ms | ops/sec | min ms | p50 ms | p99 ms | max ms |
+|---|---|---|---|---|---|---|---|---|
+| friendsforever_flat | 26,078 | PASS | 57.2 | 455,686 | 0.00065 | 0.0012 | 0.0035 | 1.2 |
+| automerge-paper | 259,778 | PASS | 736.2 | 352,850 | 0.00065 | 0.0015 | 0.0048 | 8.3 |

@@ -6,7 +6,7 @@ Socket: `node bench/trace-runner.js <trace.json.gz>` — real socket.io client a
 
 Fixed: `IdeAdd` parent resolution (identity/tag-based instead of position-based), a `tree.rs` panic on a stale remove hint, and `main.rs` silently dropping `ide-add-confirmed` under `InternalChannelFull` (now retries instead of dropping).
 
-Socket-mode automerge-paper runs intermittently showed multi-second latencies. Confirmed cause: `find_crdt`'s ring-search cost scales linearly with hint distance, and socketioxide processes each socket event as an independent tokio task with no ordering guarantee -- under the wrong processing order, hints land far from the real position (measured mean ring-search distance ~281 and climbing vs. ~1.4 on a clean run). See `TODO.md`/`KNOWN_ISSUES.md`.
+Socket-mode automerge-paper runs intermittently showed multi-second latencies. Confirmed cause: `find_crdt`'s ring-search cost scales linearly with hint distance, and socketioxide processes each socket event as an independent tokio task with no ordering guarantee -- under the wrong processing order, hints land far from the real position (measured mean ring-search distance ~281 and climbing vs. ~1.4 on a clean run). See [`TODO.md`](TODO.md)/[`KNOWN_ISSUES.md`](KNOWN_ISSUES.md).
 
 ### Socket
 

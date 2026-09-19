@@ -2,7 +2,7 @@
 
 Shario is a real-time collaborative text editor backend built on a CRDT (conflict-free replicated data type), meant for students, professors, co-workers, and others sharing a codebase live over a network. It replaces the "git commit; git push; git pull" workflow (and proprietary IDE-specific live-share tools) with a shared, IDE-agnostic core that any editor can attach to over a websocket.
 
-**Status: work in progress, not ready for real use yet.** Local collaborative editing (one shar server on one machine, one or more IDE clients attached to it) works and is tested/benchmarked against real editing-trace datasets — see `info/BENCHMARK.md`. Syncing between multiple machines over an actual network is not implemented yet; that's the current focus. See `info/TODO.md` and `info/KNOWN_ISSUES.md` for what's done, in progress, and known-broken.
+**Status: work in progress, not ready for real use yet.** Local collaborative editing (one shar server on one machine, one or more IDE clients attached to it) works and is tested/benchmarked against real editing-trace datasets — see [`info/BENCHMARK.md`](info/BENCHMARK.md). Syncing between multiple machines over an actual network is not implemented yet; that's the current focus. See [`info/TODO.md`](info/TODO.md) and [`info/KNOWN_ISSUES.md`](info/KNOWN_ISSUES.md) for what's done, in progress, and known-broken.
 
 Shario is licensed under the GNU General Public License v3 — free to use, forever.
 
@@ -37,8 +37,8 @@ Then just type or delete in a file inside the shar's directory — edits sync li
 
 - `shario/` — the Rust server (this repo). `src/shar/core/tree.rs` is the CRDT itself; `src/shar/core/queue.rs` mediates between the IDE/network and the tree; `src/main.rs` is the axum/socketioxide server and wire protocol.
 - [`shario-vscode`](https://github.com/Muna-Louis-Nwugo/shario-vscode) — the VS Code extension client (`extension.js`), a sibling repo/directory, not part of this one.
-- `bench/` — a benchmark harness that replays real [josephg/editing-traces](https://github.com/josephg/editing-traces) datasets through the actual server binary, over a real socket, to catch correctness/perf issues synthetic unit tests can't. See `info/BENCHMARK.md` for results and the harness's own comments for how to run it yourself.
-- `info/` — living documentation: `ARCHITECTURE.md` (how it's built), `PLUGIN_SPECIFICATIONS.md` (the wire contract between server and IDE plugin), `TODO.md` (what's planned/done, with reasoning), `KNOWN_ISSUES.md` (observed problems without a full fix yet), `BENCHMARK.md` (measured perf/correctness results).
+- `bench/` — a benchmark harness that replays real [josephg/editing-traces](https://github.com/josephg/editing-traces) datasets through the actual server binary, over a real socket, to catch correctness/perf issues synthetic unit tests can't. See [`info/BENCHMARK.md`](info/BENCHMARK.md) for results and the harness's own comments for how to run it yourself.
+- `info/` — living documentation: [`ARCHITECTURE.md`](info/ARCHITECTURE.md) (how it's built), [`PLUGIN_SPECIFICATIONS.md`](info/PLUGIN_SPECIFICATIONS.md) (the wire contract between server and IDE plugin), [`TODO.md`](info/TODO.md) (what's planned/done, with reasoning), [`KNOWN_ISSUES.md`](info/KNOWN_ISSUES.md) (observed problems without a full fix yet), [`BENCHMARK.md`](info/BENCHMARK.md) (measured perf/correctness results).
 
 ## Building a plugin for another editor
 

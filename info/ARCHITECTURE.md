@@ -53,7 +53,7 @@ Callbacks fired by the queue, each wired to actually emit over the socket:
 - `ide_remove_callback` → emits `network-remove` to the `"network"` room.
 - `network_add_callback` / `network_remove_callback` → currently just log; this is the seam where applying an *incoming* network op would notify local IDEs of the result. Not wired up yet — see Network below.
 
-`--bench-internal <trace.json>`, checked before any of the above, replays a trace directly against a `SharQueue` in-process and exits — see `src/bench.rs` and `info/BENCHMARK.md`.
+`--bench-internal <trace.json>`, checked before any of the above, replays a trace directly against a `SharQueue` in-process and exits — see `src/bench.rs` and [`BENCHMARK.md`](BENCHMARK.md).
 
 ## SharQueue (`src/shar/core/queue.rs`)
 
@@ -72,7 +72,7 @@ Mediates between the outside world (IDE, network) and the `Tree` — nothing tou
 
 - **`characters: HashMap<(IdSize, PeerIdSize), CrdtRelation>`** — the real CRDT data: every character's value, its parent's identity, and whether it's tombstoned. This is what would get merged over the network between replicas — order-independent, identity-keyed.
 - **`projection: Vec<Vec<(IdSize, PeerIdSize)>>`** — a line/column → identity index, derived from `characters`. This is what the IDE actually consumes (it works in row/col, not raw identities), and it's what makes sibling tie-break (which of a parent's several children does a new insert land next to) and physical insert/remove fast to apply locally. It's also how a freshly-joined IDE bootstraps identities for pre-existing content (`identities()` → `initial-state`), matched by position.
-- **`find_crdt`** ring-searches outward from a hint (a row number, not ground truth) until it finds where an identity currently sits in `projection`. Cost scales linearly with how far the hint is from the real position — a known, currently-unfixed bottleneck when processing order and send order diverge under a fast burst (see `TODO.md`/`KNOWN_ISSUES.md`). Not a correctness issue: a wrong hint costs a wider search, never a wrong result.
+- **`find_crdt`** ring-searches outward from a hint (a row number, not ground truth) until it finds where an identity currently sits in `projection`. Cost scales linearly with how far the hint is from the real position — a known, currently-unfixed bottleneck when processing order and send order diverge under a fast burst (see [`TODO.md`](TODO.md)/[`KNOWN_ISSUES.md`](KNOWN_ISSUES.md)). Not a correctness issue: a wrong hint costs a wider search, never a wrong result.
 - Newline characters split a `projection` line into two instead of occupying a column in one; a tombstoned parent's insertion point is resolved via `find_tombstone`, which climbs to the nearest live ancestor.
 
 ## Network — work in progress
@@ -81,4 +81,4 @@ Not built yet. The design intent, and what already exists toward it:
 
 - The wire events (`network-add`/`network-remove`) and the queue-side logic to apply them (`SharQueue::add_network_operation`/`remove_network_operation`, with their own backlog for out-of-order arrival) already exist and are tested — this is the same machinery a second `shar` server would use to receive another replica's edits.
 - **What's missing**: a socket handler in `main.rs` that actually accepts a peer connection into the `"network"` room and calls those queue methods on incoming `network-add`/`network-remove` events — right now only the *outgoing* broadcast side (from local edits) is wired up. `network_add_callback`/`network_remove_callback` (what should notify local IDEs once a remote op lands) are still just log statements.
-- Also needed before this is real: `Remove`'s `file_path` and `NetworkAdd`'s file paths are currently absolute, local-machine paths — meaningless once an op crosses to a peer whose shar root lives somewhere else on disk. These need to travel as paths relative to the shar's root instead (see `TODO.md`).
+- Also needed before this is real: `Remove`'s `file_path` and `NetworkAdd`'s file paths are currently absolute, local-machine paths — meaningless once an op crosses to a peer whose shar root lives somewhere else on disk. These need to travel as paths relative to the shar's root instead (see [`TODO.md`](TODO.md)).

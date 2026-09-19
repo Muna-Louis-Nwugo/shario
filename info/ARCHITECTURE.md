@@ -4,23 +4,23 @@
   ┌─────┐                                                                 ┌─────────┐
   │ IDE │                                                                 │ Network │
   └──┬──┘                                                                 └────┬────┘
-     │                                                                        │
-     │  websocket (socket.io)                       websocket (socket.io)    │
-     │  "local" room                                 "network" room          │
-     │                                                                        │
-     │                       ┌──────────────────────────┐                    │
-     └──────────────────────►│           Main            │◄───────────────────┘
-                              │   (axum + socketioxide)   │
-                              │                            │
-                              │  ┌──────────────────────┐  │
-                              │  │      SharQueue        │  │
-                              │  │  ┌────────────────┐  │  │
-                              │  │  │      Tree       │  │  │
-                              │  │  │ (SharFile /     │  │  │
-                              │  │  │  SharDirectory) │  │  │
-                              │  │  └────────────────┘  │  │
-                              │  └──────────────────────┘  │
-                              └──────────────────────────┘
+     │                                                                         │
+     │  websocket (socket.io)                       websocket (socket.io)      │
+     │  "local" room                                 "network" room            │
+     │                                                                         │
+     │                       ┌──────────────────────────┐                      │
+     └──────────────────────►│           Main           │◄─────────────────────┘
+                             │   (axum + socketioxide)  │
+                             │                          │
+                             │  ┌──────────────────────┐│
+                             │  │      SharQueue       ││
+                             │  │  ┌────────────────┐  ││
+                             │  │  │      Tree      │  ││
+                             │  │  │ (SharFile /    │  ││
+                             │  │  │  SharDirectory)│  ││
+                             │  │  └────────────────┘  ││
+                             │  └──────────────────────┘│
+                             └──────────────────────────┘
 ```
 
 Both connections are the same kind of link (a websocket, both ways) — the IDE just joins a `"local"` room and a peer joins a `"network"` room, so Main can route events to the right audience.

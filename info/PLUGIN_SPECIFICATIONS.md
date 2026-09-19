@@ -92,6 +92,7 @@ Everything above only works if the plugin maintains **its own local mirror** of 
 
 ## What a plugin does *not* need to worry about
 
-- **Peer identity assignment** — entirely server-side; a plugin never invents or sends a `peer` value for its own edits, only `tag`.
+- **Identity assignment of any kind** — a plugin never invents or sends an `id` or `peer` value for its own edits, only a `tag`. Both halves of a character's real identity are decided entirely server-side, in `SharQueue::add_ide_operation`, and handed back via `ide-add-confirmed`.
+- **Convergence rules** — sibling tie-break order, tombstone handling, how concurrent edits from other sources ultimately resolve into one agreed document: all of that lives in the CRDT tree (`SharFile`/`SharDirectory`), entirely server-side. A plugin never decides where something "really" belongs relative to another replica's edits; it just reports what it did and mirrors what the server confirms.
 - **Ordering/backlogging** — if a plugin's messages happen to get processed out of send order, or a parent hasn't resolved yet, the server holds things until they can apply correctly. A plugin never needs to retry or reorder its own sends.
 - **Network sync** — a plugin only ever talks to its own local server. Propagating edits to other machines is the server's job (once built), not the plugin's.

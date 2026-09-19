@@ -31,6 +31,8 @@ Both the IDE and (eventually) other Shar instances over the network connect to *
 
 Currently a VS Code extension (`shario-vscode/extension.js`). Send-only in the sense that it never renders remote edits by walking the tree itself — it maintains its own local mirror (`docState`: one entry per line, each with an `anchor` and an array of `cells`) that always reflects what the editor already shows, and reconciles that mirror's identities against the server over the wire.
 
+**The full contract any IDE plugin (not just this one) needs to implement — every event, every field, every invariant — is [`PLUGIN_SPECIFICATIONS.md`](PLUGIN_SPECIFICATIONS.md).** Summary of the key ideas:
+
 - **Every character gets a disposable local `tag`** the moment it's typed — just a correlation id (like a request id), not real CRDT identity. It's replaced with the server's real `(id, peer)` once confirmed.
 - **Inserts reference their parent by identity or tag, never by position** — `parent_id`/`parent_peer` if the parent is already confirmed, `parent_tag` if the parent is this same client's own not-yet-confirmed character. A `line_hint` (the current row) is sent alongside purely as a performance hint for the server's search — it has no bearing on correctness.
 - **Deletes reference their target the same way**: by real `(id, peer)` if known, or deferred until a pending `tag` resolves.

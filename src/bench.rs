@@ -162,6 +162,7 @@ async fn remove_char(queue: &mut SharQueue, lines: &mut Vec<Line>, file_path: &P
 pub async fn run(trace_path: &Path, label: &str) -> Result<(), Box<dyn std::error::Error>> {
     let raw = std::fs::read_to_string(trace_path)?;
     let trace: Trace = serde_json::from_str(&raw)?;
+    let doc_size_bytes = trace.end_content.len();
 
     let total_inserts: usize = trace
         .txns
@@ -238,6 +239,7 @@ pub async fn run(trace_path: &Path, label: &str) -> Result<(), Box<dyn std::erro
 
     let result = serde_json::json!({
         "label": label,
+        "docSizeBytes": doc_size_bytes,
         "totalCharOps": total_ops,
         "totalCharInserts": total_inserts,
         "totalCharDeletes": total_deletes,

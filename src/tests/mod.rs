@@ -1,2 +1,2 @@
-mod queue;
-mod tree;
+mod queue_test;
+mod tree_test;

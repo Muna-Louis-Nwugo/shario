@@ -397,14 +397,6 @@ impl SharFile {
                     return Ok(Some((coordinates.0 + 1, 0)));
                 }
 
-                // an empty line has no siblings to compare against, so the new character is simply
-                // the only thing on it
-                // TODO: delete this if it turns out not to cause any problems
-                // if self.projection[coordinates.0].is_empty() {
-                //     self.projection[coordinates.0].push(insertion_value);
-                //     return Ok(Some((coordinates.0, 0)));
-                // }
-
                 let start = coordinates.1;
                 let line: usize = coordinates.0;
                 let offset: usize;

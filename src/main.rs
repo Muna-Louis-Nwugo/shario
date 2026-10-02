@@ -11,9 +11,17 @@ mod shar;
 mod tests;
 mod types;
 
-use std::{path::PathBuf, sync::Arc};
+use core::time;
+use local_ip_address;
+use std::net::SocketAddr;
+use std::thread;
+use std::time::Duration;
+use std::{io, path::PathBuf, sync::Arc};
 
 use axum::routing::get;
+use bincode::config;
+use petname::petname;
+use tokio::net::UdpSocket;
 use tokio::sync::RwLock;
 use tower::ServiceBuilder;
 use tower_http::cors::CorsLayer;
@@ -25,10 +33,12 @@ use socketioxide::{
 };
 
 use crate::{
-    shar::core::queue::SharQueue,
-    shar::error::Error,
-    shar::prelude::{IdSize, PeerIdSize},
-    types::{Connect, IdeAdd, IdeAddConfirmed, NetworkAdd, Remove},
+    shar::{
+        core::queue::SharQueue,
+        error::Error,
+        prelude::{IdSize, PeerIdSize},
+    },
+    types::{BroadcastMessage, Connect, IdeAdd, IdeAddConfirmed, NetworkAdd, Remove},
 };
 
 /// Defines available Shar Commands
@@ -97,7 +107,11 @@ impl QueueWrap {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> io::Result<()> {
+    // ====================================================================================
+    // BENCHMARK CODE
+    // ====================================================================================
+
     // `--bench-internal <trace.json> [label]` replays a trace directly
     // against SharQueue in-process, skipping the server entirely -- see
     // src/bench.rs. Checked before any server setup so it can't interfere
@@ -115,8 +129,12 @@ async fn main() {
             eprintln!("bench-internal failed: {e}");
             std::process::exit(1);
         }
-        return;
+        return Ok(());
     }
+
+    // ======================================================================================================
+    // CODE TO ENABLE LOGGING
+    // ======================================================================================================
 
     // logs go to both stdout and ./shar.<date>.log so a flood -- like a
     // runaway backlog -- can be reviewed in one file after the fact instead
@@ -149,7 +167,10 @@ async fn main() {
         )
         .init();
 
-    // set up web server
+    // ==================================================================================
+    // BELOW IS THE ACTUAL SERVER IMPLEMENTATION
+    // ==================================================================================
+
     let (layer, io) = SocketIo::builder()
         // provides the state that is the queue and tree to the server
         .with_state(QueueWrap::default())
@@ -169,30 +190,68 @@ async fn main() {
                 .layer(layer),
         );
 
-    let listener = tokio::net::TcpListener::bind(&"127.0.0.1:3000")
-        .await
-        .unwrap();
+    let session_name = petname(3, "-").unwrap();
 
-    // Diagnostic: logs find_crdt's ring-search distance stats periodically, so a
-    // benchmark run's server-side log shows whether hints are landing far from their
-    // real position (see src/shar/core/tree.rs's ring_search_diagnostics).
-    tokio::spawn(async {
+    let to_be_broadcast = BroadcastMessage::new(
+        session_name,
+        local_ip_address::local_ip().expect("Couldn't get our local ip"),
+    );
+
+    let broadcast_message = bincode::serde::encode_to_vec(to_be_broadcast, config::standard())
+        .expect("Could not serialize broadcast message");
+
+    // spin up a new UDP socket
+    let sock = UdpSocket::bind(&"0.0.0.0:3000").await?;
+    sock.set_broadcast(true)?;
+    let sock_ref = Arc::new(sock);
+    let sock_clone = sock_ref.clone();
+
+    // spawn a task to braodcast indefinitely
+    tokio::spawn(async move {
         loop {
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            let (calls, total_distance, max_distance) = shar::core::tree::ring_search_diagnostics();
-            if calls > 0 {
-                tracing::info!(
-                    calls,
-                    total_distance,
-                    max_distance,
-                    mean_distance = total_distance / calls,
-                    "ring-search diagnostics"
-                );
+            // This result is never used, it just continues broadcasting indefinitely
+            let _result: io::Result<usize> = Arc::clone(&sock_clone)
+                .send_to(&broadcast_message, "255.255.255.255:3000")
+                .await;
+            thread::sleep(Duration::from_millis(10));
+        }
+    });
+
+    // spawn a task to listen indefinitely
+    tokio::spawn(async move {
+        loop {
+            // This result is never used, it just continues broadcasting indefinitely
+            let mut buf = [0u8; 1024];
+            let _result: io::Result<(usize, SocketAddr)> =
+                sock_ref.clone().recv_from(&mut buf).await;
+
+            // parse the result
+            let broadcast_from = bincode::serde::decode_from_slice::<
+                BroadcastMessage,
+                bincode::config::Configuration,
+            >(&buf, config::standard());
+
+            match broadcast_from {
+                Ok(msg) => {
+                    // TODO: 1. Setup the socketio client (maybe using rust_socketio)
+                    // 2. Send a "join" message that joins the network room
+                    // Make sure the client BREAKS UP the original massive CRDT map into
+                    // individual CRDTs
+                    // Also this client can use the same QueueWrap that the server uses, since we
+                    // want to use the same queue
+                }
+
+                Err(_) => (),
             }
         }
     });
 
-    axum::serve(listener, app).await.unwrap();
+    let ide_listener = tokio::net::TcpListener::bind(&"127.0.0.1:3000")
+        .await
+        .unwrap();
+
+    axum::serve(ide_listener, app).await.unwrap();
+    Ok(())
 }
 
 async fn on_connect(socket: SocketRef) {
@@ -289,10 +348,6 @@ async fn ide_remove_callback(socket: SocketRef, op: Remove) {
     let _ = socket.within("network").emit("network-remove", &op).await;
 }
 
-/// Total retries across every `ide_add_confirm_callback` call this process has made --
-/// a diagnostic for how often/how badly the retry loop below actually engages.
-static CONFIRM_RETRY_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
 async fn ide_add_confirm_callback(socket: SocketRef, op_return: IdeAddConfirmed) {
     tracing::debug!(?op_return, "add confirmed");
     loop {
@@ -303,8 +358,7 @@ async fn ide_add_confirm_callback(socket: SocketRef, op_return: IdeAddConfirmed)
         {
             Ok(_) => break,
             Err(e) => {
-                let total = CONFIRM_RETRY_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                tracing::warn!(?op_return, error = %e, total_retries = total, "ide-add-confirmed emit failed, retrying");
+                tracing::warn!(?op_return, error = %e, "ide-add-confirmed emit failed, retrying");
                 tokio::time::sleep(std::time::Duration::from_micros(1)).await;
             }
         }

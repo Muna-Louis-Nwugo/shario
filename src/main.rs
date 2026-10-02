@@ -246,11 +246,12 @@ async fn main() -> io::Result<()> {
         }
     });
 
-    let ide_listener = tokio::net::TcpListener::bind(&"127.0.0.1:3000")
+    // TODO: bind to "0.0.0.0:4000"
+    let listener = tokio::net::TcpListener::bind(&"127.0.0.1:3000")
         .await
         .unwrap();
 
-    axum::serve(ide_listener, app).await.unwrap();
+    axum::serve(listener, app).await.unwrap();
     Ok(())
 }
 
@@ -312,7 +313,7 @@ async fn on_connect(socket: SocketRef) {
 
             match add_attempt {
                 // TODO: Move all of this stuff into the callbacks
-                Ok(packet) => {
+                Ok(_) => {
                     tracing::debug!(socket_id = %socket.id, "ide-add attempted");
                 }
 
@@ -328,7 +329,7 @@ async fn on_connect(socket: SocketRef) {
         "remove",
         async |socket: SocketRef, Data::<Remove>(data), queue: State<QueueWrap>| {
             tracing::debug!(socket_id = %socket.id, ?data, "remove received");
-            let remove_attempt = queue.remove_ide_operation(data).await;
+            let _ = queue.remove_ide_operation(data).await;
 
             tracing::debug!(socket_id = %socket.id, "remove received ");
         },

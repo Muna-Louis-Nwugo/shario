@@ -680,12 +680,16 @@ impl SharDirectory {
 
     /// Finds the `SharFile` at `path`, recursing into subdirectories as needed.
     ///
-    /// At each level, `path`'s components matching this directory's own
-    /// `dir_name` are consumed first, then the next component is matched
-    /// against either `sub_files` (if it's the last component — a file) or
-    /// `sub_dir` (otherwise, recursing with the *original*, unstripped path
-    /// passed down fresh, since each level's own `dir_name` is always a valid
-    /// prefix of the true full path, at any depth).
+    /// At each level, `path` is scanned forward, discarding components, until
+    /// one matches this directory's own name (not an exact prefix match
+    /// against the whole absolute `dir_name` -- the path leading up to it,
+    /// home directory/username/OS, differs machine to machine; the directory
+    /// name itself is expected to match everywhere, since it comes from a
+    /// shared git clone). Then the next component is matched against either
+    /// `sub_files` (if it's the last component — a file) or `sub_dir`
+    /// (otherwise, recursing with the *original*, unstripped path passed down
+    /// fresh, since each level's own name is always findable somewhere in the
+    /// true full path, at any depth).
     fn find_file<'a>(&'a mut self, mut path: std::path::Iter<'_>) -> Option<&'a mut SharFile> {
         // check if there even is anything in here?
         if self.sub_dir.is_empty() && self.sub_files.is_empty() {
@@ -695,24 +699,21 @@ impl SharDirectory {
         // clone the path for recursive use
         let path_copy = path.clone();
 
-        let root = self.dir_name.iter();
+        // this directory's own name is the only part of dir_name that's
+        // expected to match on every machine -- everything before it (home
+        // directory, username, OS) is local to whoever sent this op
+        let this_dir_name = self.dir_name.file_name()?;
 
-        // use up the iterator until it gets past the root of the shar
-        for i in root {
-            let name = path.next();
-
-            match name {
-                Some(n) => {
-                    if i == n {
-                        continue;
-                    } else {
-                        return None;
-                    }
-                }
-                None => {
-                    return None;
-                }
-            };
+        // discard components until we find this directory's own name
+        let mut found = false;
+        for component in path.by_ref() {
+            if component == this_dir_name {
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            return None;
         }
 
         // do we still have runway in the provided path?

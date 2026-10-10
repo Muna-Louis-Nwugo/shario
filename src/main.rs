@@ -11,17 +11,18 @@ mod shar;
 mod tests;
 mod types;
 
-use core::time;
 use local_ip_address;
-use std::net::SocketAddr;
-use std::thread;
-use std::time::Duration;
 use std::{io, path::PathBuf, sync::Arc};
 
 use axum::routing::get;
-use bincode::config;
+use iroh::{
+    Endpoint, SecretKey,
+    endpoint::presets::{self, Preset},
+    protocol::Router,
+};
+use iroh_gossip::{TopicId, api::GossipTopic, net::Gossip};
 use petname::petname;
-use tokio::net::UdpSocket;
+use rand;
 use tokio::sync::RwLock;
 use tower::ServiceBuilder;
 use tower_http::cors::CorsLayer;
@@ -190,63 +191,59 @@ async fn main() -> io::Result<()> {
                 .layer(layer),
         );
 
-    let session_name = petname(3, "-").unwrap();
+    let _session_name = petname(3, "-").unwrap();
 
-    let to_be_broadcast = BroadcastMessage::new(
-        session_name,
-        local_ip_address::local_ip().expect("Couldn't get our local ip"),
-    );
-
-    let broadcast_message = bincode::serde::encode_to_vec(to_be_broadcast, config::standard())
-        .expect("Could not serialize broadcast message");
-
-    // spin up a new UDP socket
-    let sock = UdpSocket::bind(&"0.0.0.0:3000").await?;
-    sock.set_broadcast(true)?;
-    let sock_ref = Arc::new(sock);
-    let sock_clone = sock_ref.clone();
-
-    // spawn a task to braodcast indefinitely
+    // IROH
     tokio::spawn(async move {
-        loop {
-            // This result is never used, it just continues broadcasting indefinitely
-            let _result: io::Result<usize> = Arc::clone(&sock_clone)
-                .send_to(&broadcast_message, "255.255.255.255:3000")
-                .await;
-            thread::sleep(Duration::from_millis(10));
-        }
-    });
+        {
+            // generates private key
+            let secret_key = SecretKey::generate();
 
-    // spawn a task to listen indefinitely
-    tokio::spawn(async move {
-        loop {
-            // This result is never used, it just continues broadcasting indefinitely
-            let mut buf = [0u8; 1024];
-            let _result: io::Result<(usize, SocketAddr)> =
-                sock_ref.clone().recv_from(&mut buf).await;
+            // sets up the endpoint
+            let endpoint = Endpoint::builder(presets::N0)
+                .secret_key(secret_key)
+                .bind()
+                .await
+                .expect("Unable to connect to endpoint");
 
-            // parse the result
-            let broadcast_from = bincode::serde::decode_from_slice::<
-                BroadcastMessage,
-                bincode::config::Configuration,
-            >(&buf, config::standard());
+            // set up for the gossip protocol
+            let gossip = Gossip::builder().spawn(endpoint.clone());
 
-            match broadcast_from {
-                Ok(msg) => {
-                    // TODO: 1. Setup the socketio client (maybe using rust_socketio)
-                    // 2. Send a "join" message that joins the network room
-                    // Make sure the client BREAKS UP the original massive CRDT map into
-                    // individual CRDTs
-                    // Also this client can use the same QueueWrap that the server uses, since we
-                    // want to use the same queue
-                }
+            let router = Router::builder(endpoint.clone())
+                .accept(iroh_gossip::ALPN, gossip.clone())
+                .spawn();
 
-                Err(_) => (),
+            // creates a new gossip topic
+            //TODO: figure out how to get the topic_id to come from petname
+            let mut pet_name = petname(3, "-").unwrap();
+            let mut name_buf: [u8; 32] = [0; 32];
+
+            if pet_name.bytes().len() > name_buf.len() {
+                pet_name.truncate(name_buf.len());
+            } else if pet_name.bytes().len() < name_buf.len() {
+                let repeated = "-".repeat(name_buf.len() - pet_name.len());
+
+                pet_name.push_str(&repeated);
             }
+
+            // create a new iterator for the petname
+            name_buf.copy_from_slice(&pet_name.into_bytes());
+
+            let id = TopicId::from_bytes(name_buf);
+            let peer_ids = vec![];
+            let (sender, _receiver) = GossipTopic::split(
+                gossip
+                    .subscribe(id, peer_ids)
+                    .await
+                    .expect("couldn't set up gossip subscriber"),
+            );
+            sender.broadcast("sup".into()).await;
+
+            router.shutdown().await.expect("Unable to shutdown router");
         }
     });
+    // TODO: bind to "0.0.0.0:3000"
 
-    // TODO: bind to "0.0.0.0:4000"
     let listener = tokio::net::TcpListener::bind(&"127.0.0.1:3000")
         .await
         .unwrap();
@@ -313,9 +310,7 @@ async fn on_connect(socket: SocketRef) {
 
             match add_attempt {
                 // TODO: Move all of this stuff into the callbacks
-                Ok(_) => {
-                    tracing::debug!(socket_id = %socket.id, "ide-add attempted");
-                }
+                Ok(_) => {}
 
                 Err(e) => {
                     tracing::warn!(socket_id = %socket.id, error = %e, "ide-add failed");

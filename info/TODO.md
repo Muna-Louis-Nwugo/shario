@@ -24,6 +24,7 @@
 ## 🔴 Network — peer discovery & sync
 
 - [ ] **UDP discovery broadcast should target the actual local/subnet-directed broadcast address, not just `255.255.255.255`** (`main.rs`) — on a machine with multiple active network interfaces at once (WiFi + Ethernet + VPN, common on e.g. a college campus), sending to `255.255.255.255` through a socket that isn't bound to a specific interface can be ambiguous about which interface it actually goes out on. The `local_ip_address` crate can get the real interface IP to compute the subnet-directed broadcast address instead, which forces the packet out the correct interface. Deferred for now — fiddly to wire into `send_to`, not blocking anything yet.
+- [ ] **Petname → gossip `TopicId` derivation is deterministic but guessable** (`main.rs`) — the topic id is just the session's 3-word petname, truncated/padded to 32 bytes. Small word list means a stranger could brute-force/guess a live session's petname and join its gossip topic uninvited. Needs a more secure way to derive or share the topic id.
 
 ## 🟢 Serialization pipeline — pick one layout
 

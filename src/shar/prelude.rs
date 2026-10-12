@@ -27,4 +27,4 @@ pub type CRDT = types::CRDT;
 pub type IdSize = u32;
 
 /// The peer/replica id half of a node's `(id, peer)` identity.
-pub type PeerIdSize = u8;
+pub type PeerIdSize = u32;

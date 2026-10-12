@@ -2,9 +2,11 @@
 //! owning connection's socket. See [`crate::queue_wrap::QueueWrap::new`] for
 //! how these get wired up per-connection.
 
+use iroh::defaults::prod;
 use socketioxide::extract::SocketRef;
+use tokio::sync::mpsc::Sender;
 
-use crate::types::{IdeAddConfirmed, NetworkAdd, Remove};
+use crate::types::{IdeAddConfirmed, NetworkAdd, NetworkOp, Remove};
 
 pub async fn network_add_callback(_socket: SocketRef, row: usize, col: usize) {
     tracing::debug!(row, col, "add applied");
@@ -14,9 +16,14 @@ pub async fn network_remove_callback(_socket: SocketRef, row: usize, col: usize)
     tracing::debug!(row, col, "remove applied");
 }
 
-pub async fn ide_remove_callback(socket: SocketRef, op: Remove) {
+pub async fn ide_remove_callback(producer: Sender<NetworkOp>, op: Remove) {
     tracing::debug!(?op, "remove applied");
-    let _ = socket.within("network").emit("network-remove", &op).await;
+    producer.send(NetworkOp::REMOVE(op));
+}
+
+pub async fn ide_add_callback(producer: Sender<NetworkOp>, op_broadcast: NetworkAdd) {
+    tracing::debug!(?op_broadcast, "add applied");
+    producer.send(NetworkOp::ADD(op_broadcast));
 }
 
 pub async fn ide_add_confirm_callback(socket: SocketRef, op_return: IdeAddConfirmed) {
@@ -34,12 +41,4 @@ pub async fn ide_add_confirm_callback(socket: SocketRef, op_return: IdeAddConfir
             }
         }
     }
-}
-
-pub async fn ide_add_callback(socket: SocketRef, op_broadcast: NetworkAdd) {
-    tracing::debug!(?op_broadcast, "add applied");
-    let _ = socket
-        .within("network")
-        .emit("network-add", &op_broadcast)
-        .await;
 }

@@ -15,12 +15,13 @@ mod tests;
 mod types;
 
 use futures_lite::StreamExt;
-use std::io;
+use std::{io, str::FromStr};
+use tokio::sync::mpsc::Sender;
 
 use axum::routing::get;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use iroh::{
-    Endpoint, SecretKey,
+    Endpoint, RelayMode, SecretKey,
     endpoint::presets::{self, Preset},
     protocol::Router,
 };
@@ -45,10 +46,28 @@ use socketioxide::{
 
 use crate::{
     queue_wrap::QueueWrap,
-    types::{BroadcastMessage, Connect, IdeAdd, Remove, Ticket},
+    types::{BroadcastMessage, Connect, IdeAdd, NetworkAdd, NetworkOp, Remove, Ticket},
 };
 
 /// Defines available Shar Commands
+#[derive(Parser, Debug)]
+struct Args {
+    //TODO: Check if this is really needed
+    /// disable relay completely
+    no_relay: bool,
+
+    #[clap(subcommand)]
+    commmand: Commands,
+}
+
+#[derive(Debug, Subcommand)]
+enum Commands {
+    /// Creates a new shar session
+    Create { name: Option<String> },
+
+    /// Participates an existing shar session
+    Participate { name: String },
+}
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
@@ -59,16 +78,48 @@ async fn main() -> io::Result<()> {
     setup::setup_logging();
 
     // ==================================================================================
+    // BELOW IS THE CLAP PARSER
+    // ==================================================================================
+    let args = Args::parse();
+    let session_name;
+
+    let (topic, peers) = match &args.commmand {
+        Commands::Create { name } => {
+            if let Some(shar_name) = name {
+                session_name = shar_name.clone();
+            } else {
+                session_name = petname::petname(3, "-").unwrap();
+            }
+            (TopicId::from_bytes(rand::random()), vec![])
+        }
+
+        Commands::Participate { name } => {
+            let Ticket { topic, peers } =
+                Ticket::from_str(name).expect("provided name doesn't deserialize");
+            (topic, peers)
+        }
+    };
+
+    // ==================================================================================
     // BELOW IS THE ACTUAL SERVER IMPLEMENTATION
     // ==================================================================================
 
+    let relay_mode = RelayMode::Default;
+
+    // the queue that everyone shares
+    let shared_queue = QueueWrap::default();
+    let shared_queue_local = shared_queue.clone();
+
     let (layer, io) = SocketIo::builder()
         // provides the state that is the queue and tree to the server
-        .with_state(QueueWrap::default())
         .build_layer();
 
+    // communication channel between callbacks and iroh gossip protocol
+    let (tx, rx) = tokio::sync::mpsc::channel(300);
     // giving connect handler to the "/" namespace
-    io.ns("/", on_connect);
+    io.ns("/", |socket: SocketRef| {
+        on_connect(tx, shared_queue_local, socket)
+    });
 
     // .route() sets up the HTTP handler
     let app = axum::Router::<()>::new()
@@ -80,8 +131,6 @@ async fn main() -> io::Result<()> {
                 // the actual SocketIO Layer
                 .layer(layer),
         );
-
-    let _session_name = petname(3, "-").unwrap();
 
     // IROH
     tokio::spawn(async move {
@@ -119,33 +168,35 @@ async fn main() -> io::Result<()> {
             // create a new iterator for the petname
             name_buf.copy_from_slice(&pet_name.into_bytes());
 
-            let id = TopicId::from_bytes(name_buf);
-            let peer_ids = vec![];
-
             let (sender, receiver) = GossipTopic::split(
                 gossip
-                    .subscribe(id, peer_ids)
+                    .subscribe(topic, peers)
                     .await
                     .expect("couldn't set up gossip subscriber"),
             );
 
             tokio::spawn(iroh_gossip_subscriber(receiver));
 
-            let ticket = Ticket {
-                topic: id,
-                peers: vec![],
-            };
-            println!("ticket to join us: {}", ticket);
+            // TODO: USE tx/rx with the transmitter in the network callbacks to get here, put it in
+            // a loop
 
-            sender
-                .broadcast("sup".into())
-                .await
-                .expect("broadcast failed");
+            while let received = rx.recv().await {
+                match received {
+                    Some(op) => {
+                        sender
+                            .broadcast(axum::body::Bytes::from(op.into()[..]))
+                            .await;
+                    }
+
+                    None => {}
+                }
+            }
 
             router.shutdown().await.expect("Unable to shutdown router");
         }
     });
 
+    // Sets up the IDE listener
     let listener = tokio::net::TcpListener::bind(&"127.0.0.1:3000")
         .await
         .unwrap();
@@ -187,54 +238,60 @@ async fn iroh_gossip_subscriber(mut receiver: GossipReceiver) -> Result<(), ApiE
     Ok(())
 }
 
-async fn on_connect(socket: SocketRef) {
+async fn on_connect(producer: Sender<NetworkOp>, queue: QueueWrap, socket: SocketRef) {
     tracing::info!(socket_id = %socket.id, "socket connected");
 
-    socket.on(
-        "join",
-        async |socket: SocketRef, mut queue: State<QueueWrap>, Data::<Connect>(data)| {
-            tracing::info!(socket_id = %socket.id, local = data.local, path = ?data.path, "join");
+    // create clones for the listeners
+    let queue_clone = queue.clone();
+    let producer_clone = producer.clone();
+    socket.on("join", async move |socket: SocketRef, Data::<Connect>(data)| {
+        tracing::info!(socket_id = %socket.id, local = data.local, path = ?data.path, "join");
+        let mut join_queue = queue_clone.clone();
+        let join_producer = producer_clone.clone();
 
-            // leave all existing rooms
-            let _ = socket.leave_all();
-            let id = rand::rng().next_u32();
+        // leave all existing rooms
+        let _ = socket.leave_all();
+        let id = rand::rng().next_u32();
 
-            // join the appropriate room on the connect message
-            if data.local {
-                // creates a new "queue"
-                // right now, this is just a stub
-                if let Err(e) = queue
-                    .new(data.path, id, socket.clone())
-                    .await
-                {
-                    tracing::error!(socket_id = %socket.id, error = %e, "failed to initialize queue");
-                }
-                socket.join("local");
-
-                // tells the joining IDE the real (id, peer) behind every
-                // character it didn't type itself -- see extension.js's
-                // "initial-state" handler
-                for (file_path, lines) in queue.identities().await {
-                    let _ = socket
-                        .within("local").emit(
-                            "initial-state",
-                            &serde_json::json!({ "file_path": file_path, "lines": lines }),
-                        )
-                        .await;
-                }
-            } else {
-                socket.join("network");
+        // join the appropriate room on the connect message
+        if data.local {
+            // creates a new "queue"
+            // right now, this is just a stub
+            if let Err(e) = join_queue
+                .clone()
+                .new(data.path, id, socket.clone(), join_producer)
+                .await
+            {
+                tracing::error!(socket_id = %socket.id, error = %e, "failed to initialize queue");
             }
-        },
-    );
+            socket.join("local");
 
+            // tells the joining IDE the real (id, peer) behind every
+            // character it didn't type itself -- see extension.js's
+            // "initial-state" handler
+            for (file_path, lines) in join_queue.identities().await {
+                let _ = socket
+                    .within("local")
+                    .emit(
+                        "initial-state",
+                        &serde_json::json!({ "file_path": file_path, "lines": lines }),
+                    )
+                    .await;
+            }
+        } else {
+            socket.join("network");
+        }
+    });
+
+    // another clone
+    let queue_clone2 = queue.clone();
     socket.on(
         "ide-add",
         // extracts from serde_json Value type containing event's arguments into the extract type
         // Data
-        async |socket: SocketRef, queue: State<QueueWrap>, Data::<IdeAdd>(data)| {
+        async move |socket: SocketRef, Data::<IdeAdd>(data)| {
             tracing::debug!(socket_id = %socket.id, ?data, "ide-add received");
-            let add_attempt = queue.add_ide_operation(data).await;
+            let add_attempt = queue_clone2.add_ide_operation(data).await;
 
             match add_attempt {
                 // TODO: Move all of this stuff into the callbacks

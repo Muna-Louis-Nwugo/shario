@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use socketioxide::extract::SocketRef;
 use tokio::sync::RwLock;
+use tokio::sync::mpsc::Sender;
 
 use crate::network_callbacks::{
     ide_add_callback, ide_add_confirm_callback, ide_remove_callback, network_add_callback,
@@ -13,7 +14,7 @@ use crate::network_callbacks::{
 use crate::shar::core::queue::SharQueue;
 use crate::shar::error::Error;
 use crate::shar::prelude::{IdSize, PeerIdSize};
-use crate::types::{IdeAdd, NetworkAdd, Remove};
+use crate::types::{IdeAdd, NetworkAdd, NetworkOp, Remove};
 
 /// Wraps the queue for use across rooms
 #[derive(Clone, Default)]
@@ -27,12 +28,13 @@ impl QueueWrap {
         dir_path: PathBuf,
         this_peer_id: PeerIdSize,
         socket: SocketRef,
+        tx: Sender<NetworkOp>,
     ) -> Result<(), Error> {
         let socket1 = socket.clone();
         let socket2 = socket.clone();
         let socket3 = socket.clone();
-        let socket4 = socket.clone();
-        let socket5 = socket.clone();
+        let tx1 = tx.clone();
+        let tx2 = tx.clone();
 
         let real_queue = SharQueue::new(
             dir_path,
@@ -42,8 +44,8 @@ impl QueueWrap {
             Box::new(move |op_return| {
                 Box::pin(ide_add_confirm_callback(socket3.clone(), op_return))
             }),
-            Box::new(move |op_broadcast| Box::pin(ide_add_callback(socket4.clone(), op_broadcast))),
-            Box::new(move |remove| Box::pin(ide_remove_callback(socket5.clone(), remove))),
+            Box::new(move |op_broadcast| Box::pin(ide_add_callback(tx1.clone(), op_broadcast))),
+            Box::new(move |remove| Box::pin(ide_remove_callback(tx2.clone(), remove))),
         )?;
         let mut guard = self.queue.write().await; // locks the *shared* RwLock every clone points at
         if guard.network_add_callback.is_none() {

@@ -3,8 +3,9 @@
 // GLOBAL VARIABLES
 
 use core::fmt;
-use std::{net::IpAddr, path::PathBuf};
+use std::{net::IpAddr, path::PathBuf, str::FromStr};
 
+use iroh::PublicKey;
 use iroh_gossip::TopicId;
 
 use serde::{Deserialize, Serialize};
@@ -203,7 +204,7 @@ impl BroadcastMessage {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Ticket {
     pub topic: TopicId,
-    pub peers: Vec<iroh_net::NodeAddr>,
+    pub peers: Vec<PublicKey>,
 }
 
 impl Ticket {
@@ -221,5 +222,16 @@ impl fmt::Display for Ticket {
         let mut text = data_encoding::BASE32_NOPAD.encode(&self.to_bytes()[..]);
         text.make_ascii_lowercase();
         write!(f, "{}", text)
+    }
+}
+
+impl FromStr for Ticket {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let bytes = data_encoding::BASE32_NOPAD.decode(s.to_ascii_uppercase().as_bytes())?;
+        match Self::from_bytes(&bytes) {
+            Ok(st) => Ok(st),
+            Err(e) => Err(e.into()),
+        }
     }
 }

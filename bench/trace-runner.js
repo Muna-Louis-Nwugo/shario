@@ -98,7 +98,10 @@ async function main() {
 
     console.log(`[${label}] starting server (release build) against ${scratchDir}...`);
     const debug = args.includes('--debug');
-    const server = spawn(SERVER_BIN, [], {
+    // --socket-benchmark skips Redis/iroh entirely and just starts the
+    // IDE-facing socket.io server -- the clap CLI now requires a
+    // create/participate subcommand otherwise, which this harness has no use for
+    const server = spawn(SERVER_BIN, ['--socket-benchmark'], {
         cwd: scratchDir,
         stdio: ['ignore', 'ignore', 'inherit'],
         env: debug ? { ...process.env, RUST_LOG: 'shario=debug' } : process.env,

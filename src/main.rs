@@ -48,13 +48,21 @@ use crate::{
 #[derive(Parser, Debug)]
 struct Args {
     #[clap(subcommand)]
-    commmand: SharCommands,
+    commmand: Option<SharCommands>,
 
     /// Port the IDE-facing socket.io server listens on. Lets more than one
     /// `shario` instance run on the same machine at once (for local
     /// discovery/gossip testing) without port conflicts.
     #[clap(long, default_value_t = 3000)]
     port: u16,
+
+    /// Skips Redis/iroh entirely and just starts the IDE-facing socket.io
+    /// server -- for bench/trace-runner.js, which only exercises the local
+    /// IDE<->server path and has no use for peer discovery/networking. Not
+    /// to be confused with `--bench-internal`, which is a different flag
+    /// entirely, handled before clap ever parses anything (see `setup.rs`).
+    #[clap(long, default_value_t = false)]
+    socket_benchmark: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -73,6 +81,37 @@ async fn main() -> io::Result<()> {
         return Ok(());
     }
     setup::setup_logging();
+
+    // ==================================================================================
+    // BELOW IS THE CLAP PARSER
+    // ==================================================================================
+    let args = Args::parse();
+
+    if args.socket_benchmark {
+        // socket-mode benchmarking (bench/trace-runner.js) only exercises
+        // the local IDE<->server path -- no Redis, no iroh, no discovery.
+        let shared_queue = QueueWrap::default();
+        let (layer, io) = SocketIo::builder().build_layer();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(300);
+        // nothing to broadcast to in this mode -- just drain so
+        // ide_add_callback/ide_remove_callback's sends never back up and block
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
+        io.ns("/", |socket: SocketRef| on_connect(tx, shared_queue, socket));
+
+        let app = axum::Router::<()>::new()
+            .route("/", get(async || println!("Connecting...")))
+            .layer(
+                ServiceBuilder::new()
+                    .layer(CorsLayer::permissive())
+                    .layer(layer),
+            );
+
+        let listener = tokio::net::TcpListener::bind(&format!("127.0.0.1:{}", args.port))
+            .await
+            .unwrap();
+        axum::serve(listener, app).await.unwrap();
+        return Ok(());
+    }
 
     // connect to upstash redis db
     let redis_url = env!("REDIS_URL");
@@ -93,13 +132,13 @@ async fn main() -> io::Result<()> {
         .await
         .expect("Unable to connect to endpoint");
 
-    // ==================================================================================
-    // BELOW IS THE CLAP PARSER
-    // ==================================================================================
-    let args = Args::parse();
     let session_name;
 
-    let (topic, mut peers) = match &args.commmand {
+    let (topic, mut peers) = match args
+        .commmand
+        .as_ref()
+        .expect("a subcommand (create/participate) is required unless --socket-benchmark is set")
+    {
         SharCommands::Create { name } => {
             if let Some(shar_name) = name {
                 session_name = shar_name.clone();

@@ -155,8 +155,8 @@ async fn main() -> io::Result<()> {
             };
 
             // if this name is already in use,bail out
-            let existing: Option<Vec<u8>> = con.get(&session_name).ok();
-            if existing.is_some() {
+            let exists: bool = con.exists(&session_name).unwrap_or(false);
+            if exists {
                 return Err(io::Error::other("Session name already exists"));
             }
             // creates this name and its keys in the redis db

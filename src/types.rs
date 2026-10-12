@@ -2,7 +2,10 @@
 
 // GLOBAL VARIABLES
 
+use core::fmt;
 use std::{net::IpAddr, path::PathBuf};
+
+use iroh_gossip::TopicId;
 
 use serde::{Deserialize, Serialize};
 
@@ -14,15 +17,15 @@ pub struct CrdtRelation {
     /// The character this node represents.
     pub value: char,
     /// Parent's id. `(0, 0)` is the root sentinel.
-    pub parent_id: u32,
+    pub parent_id: IdSize,
     /// Parent's peer.
-    pub parent_peer: u8,
+    pub parent_peer: PeerIdSize,
     /// Whether this node has been tombstoned.
     pub deleted: bool,
 }
 
 impl CrdtRelation {
-    pub fn new(value: char, parent_id: u32, parent_peer: u8) -> Self {
+    pub fn new(value: char, parent_id: IdSize, parent_peer: PeerIdSize) -> Self {
         CrdtRelation {
             value: value,
             parent_id: parent_id,
@@ -36,14 +39,14 @@ impl CrdtRelation {
 #[derive(Copy, PartialEq, Clone, Debug, Deserialize, Serialize)]
 pub struct CRDT {
     /// Unique when paired with `peer`.
-    pub id: u32,
+    pub id: IdSize,
     /// The peer/replica that created this node.
-    pub peer: u8,
+    pub peer: PeerIdSize,
     pub relation: CrdtRelation,
 }
 
 impl CRDT {
-    pub fn new(id: u32, peer: u8, relation: CrdtRelation) -> Self {
+    pub fn new(id: IdSize, peer: PeerIdSize, relation: CrdtRelation) -> Self {
         CRDT {
             id: id,
             peer: peer,
@@ -81,15 +84,15 @@ pub struct Remove {
     /// The file this removal belongs to.
     pub file_path: PathBuf,
     /// Target id.
-    pub id: u32,
+    pub id: IdSize,
     /// Target peer.
-    pub peer: u8,
+    pub peer: PeerIdSize,
     /// Ring-search hint line, not a guaranteed final position.
     pub row: usize,
 }
 
 impl Remove {
-    pub fn new(file_path: PathBuf, id: u32, peer: u8, row: usize) -> Self {
+    pub fn new(file_path: PathBuf, id: IdSize, peer: PeerIdSize, row: usize) -> Self {
         Remove {
             file_path: file_path,
             id: id,
@@ -193,5 +196,30 @@ impl BroadcastMessage {
             shar_id: id,
             ip_address: ip,
         }
+    }
+}
+
+/// A ticket for purposes of signalling
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Ticket {
+    pub topic: TopicId,
+    pub peers: Vec<iroh_net::NodeAddr>,
+}
+
+impl Ticket {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, serde_json::Error> {
+        serde_json::from_slice(bytes)
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        serde_json::to_vec(self).expect("serde_json::to_vec is infallible")
+    }
+}
+
+impl fmt::Display for Ticket {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let mut text = data_encoding::BASE32_NOPAD.encode(&self.to_bytes()[..]);
+        text.make_ascii_lowercase();
+        write!(f, "{}", text)
     }
 }

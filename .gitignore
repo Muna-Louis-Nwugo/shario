@@ -35,4 +35,5 @@ shar*.log
 # `npm install` in bench/, not checked in
 bench/node_modules/
 
-
+*/.env
+.env

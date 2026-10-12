@@ -2,28 +2,29 @@
 //! owning connection's socket. See [`crate::queue_wrap::QueueWrap::new`] for
 //! how these get wired up per-connection.
 
-use iroh::defaults::prod;
 use socketioxide::extract::SocketRef;
 use tokio::sync::mpsc::Sender;
 
 use crate::types::{IdeAddConfirmed, NetworkAdd, NetworkOp, Remove};
 
-pub async fn network_add_callback(_socket: SocketRef, row: usize, col: usize) {
-    tracing::debug!(row, col, "add applied");
+pub async fn network_add_callback(socket: SocketRef, op: NetworkAdd) {
+    tracing::debug!(?op, "add applied");
+    let _ = socket.within("local").emit("network-add", &op).await;
 }
 
-pub async fn network_remove_callback(_socket: SocketRef, row: usize, col: usize) {
-    tracing::debug!(row, col, "remove applied");
+pub async fn network_remove_callback(socket: SocketRef, op: Remove) {
+    tracing::debug!(?op, "remove applied");
+    let _ = socket.within("local").emit("network-remove", &op).await;
 }
 
 pub async fn ide_remove_callback(producer: Sender<NetworkOp>, op: Remove) {
     tracing::debug!(?op, "remove applied");
-    producer.send(NetworkOp::REMOVE(op));
+    producer.send(NetworkOp::REMOVE(op)).await.expect("Inside ide_remove_callback, for some reason the consumer of this producer has stopped listening");
 }
 
 pub async fn ide_add_callback(producer: Sender<NetworkOp>, op_broadcast: NetworkAdd) {
     tracing::debug!(?op_broadcast, "add applied");
-    producer.send(NetworkOp::ADD(op_broadcast));
+    producer.send(NetworkOp::ADD(op_broadcast)).await.expect("Inside ide_add_callback, for some reason the consumer of this producer has stopped listening");
 }
 
 pub async fn ide_add_confirm_callback(socket: SocketRef, op_return: IdeAddConfirmed) {

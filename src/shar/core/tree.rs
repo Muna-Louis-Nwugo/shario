@@ -3,6 +3,8 @@
 
 use std::fmt;
 
+use axum::extract::Path;
+
 use crate::shar::prelude::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -551,6 +553,10 @@ impl SharFile {
             Err(_e) => Err(Error::Generic(String::from("crdt not found"))),
         }
     }
+
+    pub fn full_state(&self) -> HashMap<(IdSize, PeerIdSize), CrdtRelation> {
+        return self.characters.clone();
+    }
 }
 
 impl<'a> fmt::Display for SharFile {
@@ -570,6 +576,13 @@ pub struct SharDirectory {
 }
 
 impl SharDirectory {
+    /// The absolute path this shar was opened with. Only this replica's own
+    /// local filesystem layout is meaningful here -- never send this across
+    /// the network as-is (see `SharQueue`'s path handling).
+    pub fn root(&self) -> &PathBuf {
+        &self.dir_name
+    }
+
     /// Recursively loads `dir_path`, sharing `counter` across every file.
     /// Doesn't support symlinks yet.
     pub fn new(dir_path: PathBuf, counter: &mut u32) -> Result<Self> {
@@ -673,6 +686,20 @@ impl SharDirectory {
 
         for dir in &self.sub_dir {
             out.extend(dir.identities());
+        }
+
+        out
+    }
+
+    pub fn full_state(&self) -> Vec<(PathBuf, HashMap<(IdSize, PeerIdSize), CrdtRelation>)> {
+        let mut out: Vec<(PathBuf, HashMap<(IdSize, PeerIdSize), CrdtRelation>)> = self
+            .sub_files
+            .iter()
+            .map(|file| (file.file_path.clone(), file.full_state()))
+            .collect();
+
+        for dir in &self.sub_dir {
+            out.extend(dir.full_state());
         }
 
         out

@@ -10,8 +10,8 @@ use std::path::PathBuf;
 // thread, same as any #[test]) observe exactly which callbacks fired, without any
 // locking and without cross-test contamination even if the harness reuses a thread.
 thread_local! {
-    static ADD_CALLS: RefCell<Vec<(usize, usize)>> = RefCell::new(Vec::new());
-    static REMOVE_CALLS: RefCell<Vec<(usize, usize)>> = RefCell::new(Vec::new());
+    static ADD_CALLS: RefCell<Vec<NetworkAdd>> = RefCell::new(Vec::new());
+    static REMOVE_CALLS: RefCell<Vec<Remove>> = RefCell::new(Vec::new());
     static IDE_ADD_CONFIRM_CALLS: RefCell<Vec<(u32, IdSize, PeerIdSize)>> = RefCell::new(Vec::new());
     static IDE_ADD_BROADCAST_CALLS: RefCell<Vec<NetworkAdd>> = RefCell::new(Vec::new());
     static IDE_REMOVE_CALLS: RefCell<Vec<Remove>> = RefCell::new(Vec::new());
@@ -25,12 +25,12 @@ fn reset_calls() {
     IDE_REMOVE_CALLS.with(|c| c.borrow_mut().clear());
 }
 
-async fn record_add(row: usize, col: usize) {
-    ADD_CALLS.with(|c| c.borrow_mut().push((row, col)));
+async fn record_add(op: NetworkAdd) {
+    ADD_CALLS.with(|c| c.borrow_mut().push(op));
 }
 
-async fn record_remove(row: usize, col: usize) {
-    REMOVE_CALLS.with(|c| c.borrow_mut().push((row, col)));
+async fn record_remove(op: Remove) {
+    REMOVE_CALLS.with(|c| c.borrow_mut().push(op));
 }
 
 async fn record_ide_add_confirm(confirmed: IdeAddConfirmed) {
@@ -45,11 +45,11 @@ async fn record_ide_remove(op: Remove) {
     IDE_REMOVE_CALLS.with(|c| c.borrow_mut().push(op));
 }
 
-fn add_calls() -> Vec<(usize, usize)> {
+fn add_calls() -> Vec<NetworkAdd> {
     ADD_CALLS.with(|c| c.borrow().clone())
 }
 
-fn remove_calls() -> Vec<(usize, usize)> {
+fn remove_calls() -> Vec<Remove> {
     REMOVE_CALLS.with(|c| c.borrow().clone())
 }
 
@@ -77,8 +77,8 @@ fn setup(dir_name: &str, content: &str) -> (SharQueue, PathBuf) {
     let queue = SharQueue::new(
         dir_path,
         0,
-        Box::new(|row, col| Box::pin(record_add(row, col))),
-        Box::new(|row, col| Box::pin(record_remove(row, col))),
+        Box::new(|op| Box::pin(record_add(op))),
+        Box::new(|op| Box::pin(record_remove(op))),
         Box::new(|confirmed| Box::pin(record_ide_add_confirm(confirmed))),
         Box::new(|op| Box::pin(record_ide_add(op))),
         Box::new(|op| Box::pin(record_ide_remove(op))),
@@ -112,7 +112,10 @@ async fn add_ide_operation_applies_and_fires_callback() {
     let broadcasts = ide_add_broadcast_calls();
     assert_eq!(broadcasts.len(), 1, "ide_add_callback should have fired once, once actually inserted");
     let op = broadcasts[0].clone();
-    assert_eq!(op.file_path, file_path);
+    // file paths travel the wire relative to the shar's root, not as the
+    // local absolute path -- meaningless once it crosses to a peer whose
+    // shar root lives somewhere else entirely
+    assert_eq!(op.file_path, PathBuf::from("f.txt"));
     assert_eq!(op.crdt.relation.value, 'c');
     assert_eq!(
         (op.crdt.id, op.crdt.peer),
@@ -315,12 +318,12 @@ async fn remove_network_operation_applies_and_fires_callback() {
 
     // id 1 is 'a', at (0, 1) now that index 0 is the line's anchor
     let op = Remove::new(file_path, 1, 0, 0);
-    queue.remove_network_operation(op).await;
+    queue.remove_network_operation(op.clone()).await;
 
     assert_eq!(
         remove_calls(),
-        vec![(0, 1)],
-        "removing 'a' should fire the callback with its position"
+        vec![op],
+        "removing 'a' should fire the callback with the full op"
     );
 
     teardown("scratch_queue_remove_network");

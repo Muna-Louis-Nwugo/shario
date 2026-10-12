@@ -1,5 +1,6 @@
 //! Wraps `SharQueue` for shared access across every socket.io connection.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -14,10 +15,10 @@ use crate::network_callbacks::{
 use crate::shar::core::queue::SharQueue;
 use crate::shar::error::Error;
 use crate::shar::prelude::{IdSize, PeerIdSize};
-use crate::types::{IdeAdd, NetworkAdd, NetworkOp, Remove};
+use crate::types::{CrdtRelation, IdeAdd, NetworkAdd, NetworkOp, Remove};
 
 /// Wraps the queue for use across rooms
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct QueueWrap {
     queue: Arc<RwLock<SharQueue>>,
 }
@@ -39,8 +40,8 @@ impl QueueWrap {
         let real_queue = SharQueue::new(
             dir_path,
             this_peer_id,
-            Box::new(move |row, col| Box::pin(network_add_callback(socket1.clone(), row, col))),
-            Box::new(move |row, col| Box::pin(network_remove_callback(socket2.clone(), row, col))),
+            Box::new(move |op| Box::pin(network_add_callback(socket1.clone(), op))),
+            Box::new(move |op| Box::pin(network_remove_callback(socket2.clone(), op))),
             Box::new(move |op_return| {
                 Box::pin(ide_add_confirm_callback(socket3.clone(), op_return))
             }),
@@ -77,5 +78,10 @@ impl QueueWrap {
     pub async fn identities(&self) -> Vec<(PathBuf, Vec<Vec<(IdSize, PeerIdSize)>>)> {
         let queue = self.queue.read().await;
         queue.identities()
+    }
+
+    pub async fn full_state(&self) -> Vec<(PathBuf, HashMap<(IdSize, PeerIdSize), CrdtRelation>)> {
+        let queue = self.queue.read().await;
+        queue.full_state()
     }
 }

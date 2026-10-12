@@ -189,8 +189,8 @@ pub async fn run(trace_path: &Path, label: &str) -> Result<(), Box<dyn std::erro
     let mut queue = SharQueue::new(
         scratch_dir.clone(),
         0,
-        Box::new(|_row, _col| Box::pin(async {})),
-        Box::new(|_row, _col| Box::pin(async {})),
+        Box::new(|_op| Box::pin(async {})),
+        Box::new(|_op| Box::pin(async {})),
         Box::new(move |op_return: IdeAddConfirmed| {
             let confirmed = confirmed_for_callback.clone();
             Box::pin(async move {

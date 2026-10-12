@@ -10,32 +10,26 @@ mod network_callbacks;
 mod queue_wrap;
 mod setup;
 mod shar;
+mod state_request;
 #[cfg(test)]
 mod tests;
 mod types;
 
 use futures_lite::StreamExt;
-use std::{io, str::FromStr};
+use redis::{self, Commands, RedisError};
+use std::{cmp, io, ops::Index, str::FromStr};
 use tokio::sync::mpsc::Sender;
 
 use axum::routing::get;
 use clap::{Parser, Subcommand};
-use iroh::{
-    Endpoint, RelayMode, SecretKey,
-    endpoint::presets::{self, Preset},
-    protocol::Router,
-};
+use iroh::{Endpoint, PublicKey, RelayMode, SecretKey, endpoint::presets, protocol::Router};
 use iroh_gossip::{
     TopicId,
-    api::{
-        ApiError,
-        Event::{self, Received},
-        GossipReceiver, GossipTopic,
-    },
+    api::{ApiError, Event, GossipReceiver, GossipTopic},
     net::Gossip,
+    proto::topic,
 };
-use petname::petname;
-use rand::{self, Rng};
+use rand::{self, Rng, random_range, seq::IndexedRandom};
 use tower::ServiceBuilder;
 use tower_http::cors::CorsLayer;
 
@@ -46,22 +40,25 @@ use socketioxide::{
 
 use crate::{
     queue_wrap::QueueWrap,
-    types::{BroadcastMessage, Connect, IdeAdd, NetworkAdd, NetworkOp, Remove, Ticket},
+    state_request::request_state,
+    types::{Connect, IdeAdd, NetworkOp, Remove, Ticket},
 };
 
-/// Defines available Shar Commands
+/// Defines available Shar SharCommands
 #[derive(Parser, Debug)]
 struct Args {
-    //TODO: Check if this is really needed
-    /// disable relay completely
-    no_relay: bool,
-
     #[clap(subcommand)]
-    commmand: Commands,
+    commmand: SharCommands,
+
+    /// Port the IDE-facing socket.io server listens on. Lets more than one
+    /// `shario` instance run on the same machine at once (for local
+    /// discovery/gossip testing) without port conflicts.
+    #[clap(long, default_value_t = 3000)]
+    port: u16,
 }
 
 #[derive(Debug, Subcommand)]
-enum Commands {
+enum SharCommands {
     /// Creates a new shar session
     Create { name: Option<String> },
 
@@ -77,25 +74,67 @@ async fn main() -> io::Result<()> {
     }
     setup::setup_logging();
 
+    // connect to upstash redis db
+    let redis_url = env!("REDIS_URL");
+    let client = redis::Client::open(redis_url).expect("Unable to connect to database");
+    let mut con = client
+        .get_connection()
+        .expect("Unable to connect to database");
+
+    // THESE NEXT TWO ARE FOR IROH, I'M INITIALIZING THEM HERE SO I CAN USE THEM IN DISCOVERY
+    // generates private key
+    let secret_key = SecretKey::generate();
+
+    // sets up the endpoint
+    let endpoint = Endpoint::builder(presets::N0)
+        .relay_mode(RelayMode::Default)
+        .secret_key(secret_key)
+        .bind()
+        .await
+        .expect("Unable to connect to endpoint");
+
     // ==================================================================================
     // BELOW IS THE CLAP PARSER
     // ==================================================================================
     let args = Args::parse();
     let session_name;
 
-    let (topic, peers) = match &args.commmand {
-        Commands::Create { name } => {
+    let (topic, mut peers) = match &args.commmand {
+        SharCommands::Create { name } => {
             if let Some(shar_name) = name {
                 session_name = shar_name.clone();
             } else {
                 session_name = petname::petname(3, "-").unwrap();
+                // prints the session name to be parsed by the client if neceessary
+                println!("{}", session_name);
             }
-            (TopicId::from_bytes(rand::random()), vec![])
+            let topic_id = TopicId::from_bytes(rand::random());
+            let peers_vec = vec![];
+            let ticket = Ticket {
+                topic: topic_id,
+                peers: peers_vec.clone(),
+            };
+
+            // if this name is already in use,bail out
+            let existing: Option<Vec<u8>> = con.get(&session_name).ok();
+            if existing.is_some() {
+                return Err(io::Error::other("Session name already exists"));
+            }
+            // creates this name and its keys in the redis db
+            // the key will expire automatically after 24 hours
+            let _: () = con.set_ex(&session_name, ticket.to_bytes(), 86400).unwrap();
+            (topic_id, peers_vec)
         }
 
-        Commands::Participate { name } => {
+        SharCommands::Participate { name } => {
+            session_name = name.clone();
+            let ticket_bytes: Vec<u8> = con
+                .get(&session_name)
+                .expect("This shar name doesn't exist");
+
             let Ticket { topic, peers } =
-                Ticket::from_str(name).expect("provided name doesn't deserialize");
+                Ticket::from_bytes(&ticket_bytes).expect("Unable to generate tickets");
+
             (topic, peers)
         }
     };
@@ -104,18 +143,42 @@ async fn main() -> io::Result<()> {
     // BELOW IS THE ACTUAL SERVER IMPLEMENTATION
     // ==================================================================================
 
-    let relay_mode = RelayMode::Default;
-
     // the queue that everyone shares
     let shared_queue = QueueWrap::default();
     let shared_queue_local = shared_queue.clone();
+    let shared_queue_discovery = shared_queue.clone();
+    // THIS IS A BAD NAME it stays local, but it's given to the part of the program that listens to
+    // the netowrk
+    let shared_queue_network = shared_queue.clone();
+
+    // let discovery happen
+    let mut random_generator = rand::rng();
+    let mut discovery_peers = peers.clone();
+    let mut num_discovery_peers = cmp::min(3, discovery_peers.len());
+
+    while num_discovery_peers > 0 {
+        //selects a random peer
+        let random_peer = discovery_peers.choose(&mut random_generator).unwrap();
+
+        // hydration
+        request_state(&endpoint, (*random_peer).into(), &shared_queue_discovery).await;
+
+        let _ = discovery_peers.remove(
+            discovery_peers
+                .iter()
+                .position(|&x| x == (*random_peer))
+                .unwrap(),
+        );
+
+        num_discovery_peers -= 1;
+    }
 
     let (layer, io) = SocketIo::builder()
         // provides the state that is the queue and tree to the server
         .build_layer();
 
     // communication channel between callbacks and iroh gossip protocol
-    let (tx, rx) = tokio::sync::mpsc::channel(300);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(300);
     // giving connect handler to the "/" namespace
     io.ns("/", |socket: SocketRef| {
         on_connect(tx, shared_queue_local, socket)
@@ -135,61 +198,52 @@ async fn main() -> io::Result<()> {
     // IROH
     tokio::spawn(async move {
         {
-            // generates private key
-            let secret_key = SecretKey::generate();
-
-            // sets up the endpoint
-            let endpoint = Endpoint::builder(presets::N0)
-                .secret_key(secret_key)
-                .bind()
-                .await
-                .expect("Unable to connect to endpoint");
+            // handles state requests
+            let state_request_handler =
+                state_request::StateRequestHandler::new(shared_queue_discovery);
 
             // set up for the gossip protocol
             let gossip = Gossip::builder().spawn(endpoint.clone());
 
             let router = Router::builder(endpoint.clone())
                 .accept(iroh_gossip::ALPN, gossip.clone())
+                .accept(
+                    state_request::STATE_REQUEST_ALPN,
+                    state_request_handler.clone(),
+                )
                 .spawn();
 
             // creates a new gossip topic
-            //TODO: figure out how to get the topic_id to come from petname
-            let mut pet_name = petname(3, "-").unwrap();
-            let mut name_buf: [u8; 32] = [0; 32];
-
-            if pet_name.bytes().len() > name_buf.len() {
-                pet_name.truncate(name_buf.len());
-            } else if pet_name.bytes().len() < name_buf.len() {
-                let repeated = "-".repeat(name_buf.len() - pet_name.len());
-
-                pet_name.push_str(&repeated);
-            }
-
-            // create a new iterator for the petname
-            name_buf.copy_from_slice(&pet_name.into_bytes());
 
             let (sender, receiver) = GossipTopic::split(
                 gossip
-                    .subscribe(topic, peers)
+                    .subscribe(topic, peers.clone())
                     .await
                     .expect("couldn't set up gossip subscriber"),
             );
 
-            tokio::spawn(iroh_gossip_subscriber(receiver));
+            // add this shar to the db
+            peers.push(endpoint.id());
+            let this_ticket = Ticket {
+                topic: topic,
+                peers: peers.clone(),
+            };
 
-            // TODO: USE tx/rx with the transmitter in the network callbacks to get here, put it in
-            // a loop
+            let _: () = con
+                .set_ex(&session_name, this_ticket.to_bytes(), 86400)
+                .unwrap();
 
-            while let received = rx.recv().await {
-                match received {
-                    Some(op) => {
-                        sender
-                            .broadcast(axum::body::Bytes::from(op.into()[..]))
-                            .await;
-                    }
+            // spin up the subscriber to the gossip protocol
+            tokio::spawn(iroh_gossip_subscriber(
+                receiver,
+                endpoint.clone(),
+                shared_queue_network,
+            ));
 
-                    None => {}
-                }
+            while let Some(received) = rx.recv().await {
+                let _ = sender
+                    .broadcast(axum::body::Bytes::from(received.serialize()))
+                    .await;
             }
 
             router.shutdown().await.expect("Unable to shutdown router");
@@ -197,7 +251,7 @@ async fn main() -> io::Result<()> {
     });
 
     // Sets up the IDE listener
-    let listener = tokio::net::TcpListener::bind(&"127.0.0.1:3000")
+    let listener = tokio::net::TcpListener::bind(&format!("127.0.0.1:{}", args.port))
         .await
         .unwrap();
 
@@ -205,28 +259,35 @@ async fn main() -> io::Result<()> {
     Ok(())
 }
 
-async fn iroh_gossip_subscriber(mut receiver: GossipReceiver) -> Result<(), ApiError> {
+async fn iroh_gossip_subscriber(
+    mut receiver: GossipReceiver,
+    endpoint: Endpoint,
+    queue: QueueWrap,
+) -> Result<(), ApiError> {
     while let Some(event) = receiver.next().await {
         match event {
-            Ok(event) => {
-                match event {
-                    Event::Received(_msg) => {
-                        // TODO: Figure out what to do once the message has arrived
-                    }
+            Ok(event) => match event {
+                Event::Received(msg) => {
+                    let data = NetworkOp::deserialize(&msg.content.to_vec())
+                        .expect("Deserialization is infallible");
 
-                    Event::NeighborDown(_msg) => {
-                        // TODO: Figure out what to do once this event has been received
-                    }
+                    match data {
+                        NetworkOp::ADD(op) => {
+                            queue.add_network_operation(op).await;
+                        }
 
-                    Event::NeighborUp(_msg) => {
-                        // TODO: figure out what to do once this event has been recieved
-                    }
-
-                    Event::Lagged => {
-                        // TODO: Figure out what to do when this event has been recieved
+                        NetworkOp::REMOVE(op) => {
+                            queue.remove_network_operation(op).await;
+                        }
                     }
                 }
-            }
+
+                Event::NeighborUp(key) => {
+                    // hydrate this shar's state with whatever the new peer has
+                    request_state(&endpoint, key.into(), &queue).await;
+                }
+                _ => {}
+            },
 
             Err(e) => {
                 eprintln!("{}", format!("Failed to read directory entry: \n {e} \n"));

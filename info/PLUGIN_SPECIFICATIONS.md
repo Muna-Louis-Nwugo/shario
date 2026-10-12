@@ -4,9 +4,24 @@ The contract between a `shar` server and an IDE plugin. If you're building a new
 
 This document covers the **IDE side of the protocol only** (`"local"` room). It does not cover peer-to-peer network sync (`"network"` room) — that's a separate, not-yet-built contract for server-to-server communication, not something a plugin needs to implement.
 
+## Launching the server
+
+A plugin doesn't connect to a server that's just assumed to already be running — it's responsible for actually starting one, by running the `shario` binary with one of two subcommands:
+
+```
+shario [--port <N>] create [name]
+shario [--port <N>] participate <name>
+```
+
+- **`create [name]`** — starts a brand-new session. `name` is optional; if omitted, the server picks a random one itself. Either way, **the plugin needs to know the actual name used** (to show the user, so they can share it with collaborators) — if the plugin wants to guarantee it knows the name without parsing server output, it should generate the name itself and always pass it explicitly, rather than ever relying on the server's own random fallback.
+- **`participate <name>`** — joins an existing session by the name its creator used. `name` is required.
+- **`--port <N>`** — which port the IDE-facing socket.io server listens on (default `3000`). Only needed to run more than one `shario` instance on the same machine at once; a plugin normally doesn't need to set this.
+
+The plugin owns this process's lifecycle: spawn it, watch for it dying unexpectedly and restart it (with the same subcommand/name it was originally launched with — a restart has to rejoin the same session, not start a new one), and only then connect over socket.io as described below.
+
 ## Transport
 
-A plain [socket.io](https://socket.io/) connection to the server's `/` namespace (default `http://127.0.0.1:3000`). One socket connection per plugin instance.
+A plain [socket.io](https://socket.io/) connection to the server's `/` namespace (default `http://127.0.0.1:3000`, or whatever `--port` was given). One socket connection per plugin instance.
 
 ## Connecting
 

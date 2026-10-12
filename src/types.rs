@@ -80,7 +80,7 @@ impl NetworkAdd {
 
 /// A single character remote removal — just a target `(id, peer)`,
 /// no value or parent needed. See [`crate::shar::core::queue::SharQueue`].
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct Remove {
     /// The file this removal belongs to.
     pub file_path: PathBuf,
@@ -152,10 +152,20 @@ impl IdeAdd {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum NetworkOp {
     ADD(NetworkAdd),
     REMOVE(Remove),
+}
+
+impl NetworkOp {
+    pub fn serialize(&self) -> Vec<u8> {
+        serde_json::to_vec(self).expect("serde_json::to_vec is infallible")
+    }
+
+    pub fn deserialize(bytes: &[u8]) -> Result<Self, serde_json::Error> {
+        serde_json::from_slice(bytes)
+    }
 }
 
 /// A Websocket connection message

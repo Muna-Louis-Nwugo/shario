@@ -44,10 +44,18 @@ pub struct SharQueue {
     /// Shared across every file in the directory.
     counter: u32,
 
-    /// Called with `(row, col)` when an add is applied.
-    pub network_add_callback: Option<Box<dyn Fn(usize, usize) -> BoxedFun + Send + Sync>>,
-    /// Called with `(row, col, was_line_merge)` when a remove is applied.
-    pub network_remove_callback: Option<Box<dyn Fn(usize, usize) -> BoxedFun + Send + Sync>>,
+    /// Called with the full op once an add has actually landed -- not
+    /// gated on arrival order, since a backlogged add fires this from
+    /// `clear_network_backlog` instead, potentially much later than when it
+    /// was first received. Carries the whole `NetworkAdd` (not just its
+    /// identity/position) since this is what eventually notifies a local
+    /// IDE, which has never seen this character before and needs its value
+    /// and parent to insert it into its own mirror.
+    pub network_add_callback: Option<Box<dyn Fn(NetworkAdd) -> BoxedFun + Send + Sync>>,
+    /// Called with the full op once a remove has actually landed. See
+    /// `network_add_callback` for why the whole op travels through, not
+    /// just an identity.
+    pub network_remove_callback: Option<Box<dyn Fn(Remove) -> BoxedFun + Send + Sync>>,
     /// Called the instant an IDE add's identity is assigned -- not gated on
     /// tree insertion, so it's always immediate.
     pub ide_add_confirm_callback: Option<Box<dyn Fn(IdeAddConfirmed) -> BoxedFun + Send + Sync>>,
@@ -55,6 +63,35 @@ pub struct SharQueue {
     /// broadcast it to other peers.
     pub ide_add_callback: Option<Box<dyn Fn(NetworkAdd) -> BoxedFun + Send + Sync>>,
     pub ide_remove_callback: Option<Box<dyn Fn(Remove) -> BoxedFun + Send + Sync>>,
+}
+
+// Hand-written instead of derived -- the boxed `dyn Fn` callback fields
+// can't implement `Debug`, so a derive fails on them.
+impl std::fmt::Debug for SharQueue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SharQueue")
+            .field("ide_backlog", &self.ide_backlog)
+            .field("ide_tag_backlog", &self.ide_tag_backlog)
+            .field("network_backlog", &self.network_backlog)
+            .field("ide_worklist", &self.ide_worklist)
+            .field("network_worklist", &self.network_worklist)
+            .field("tag_identities", &self.tag_identities)
+            .field("peer", &self.peer)
+            .field("tree", &self.tree)
+            .field("counter", &self.counter)
+            .field("network_add_callback", &self.network_add_callback.is_some())
+            .field(
+                "network_remove_callback",
+                &self.network_remove_callback.is_some(),
+            )
+            .field(
+                "ide_add_confirm_callback",
+                &self.ide_add_confirm_callback.is_some(),
+            )
+            .field("ide_add_callback", &self.ide_add_callback.is_some())
+            .field("ide_remove_callback", &self.ide_remove_callback.is_some())
+            .finish()
+    }
 }
 
 impl SharQueue {
@@ -66,8 +103,8 @@ impl SharQueue {
     pub fn new(
         dir_path: PathBuf,
         this_peer_id: PeerIdSize,
-        network_add_callback: Box<dyn Fn(usize, usize) -> BoxedFun + Send + Sync>,
-        network_remove_callback: Box<dyn Fn(usize, usize) -> BoxedFun + Send + Sync>,
+        network_add_callback: Box<dyn Fn(NetworkAdd) -> BoxedFun + Send + Sync>,
+        network_remove_callback: Box<dyn Fn(Remove) -> BoxedFun + Send + Sync>,
         ide_add_confirm_callback: Box<dyn Fn(IdeAddConfirmed) -> BoxedFun + Send + Sync>,
         ide_add_callback: Box<dyn Fn(NetworkAdd) -> BoxedFun + Send + Sync>,
         ide_remove_callback: Box<dyn Fn(Remove) -> BoxedFun + Send + Sync>,
@@ -99,6 +136,27 @@ impl SharQueue {
     /// [`SharDirectory::identities`].
     pub fn identities(&self) -> Vec<(PathBuf, Vec<Vec<(IdSize, PeerIdSize)>>)> {
         self.tree.identities()
+    }
+
+    pub fn full_state(&self) -> Vec<(PathBuf, HashMap<(IdSize, PeerIdSize), CrdtRelation>)> {
+        self.tree.full_state()
+    }
+
+    /// Strips this shar's own root off an absolute path, for putting a file
+    /// path on the wire -- an absolute local path is meaningless once it
+    /// crosses to a peer whose shar root lives somewhere else entirely.
+    /// Falls back to the path as-is if it somehow isn't under this shar's
+    /// root at all (shouldn't happen under correct IDE behavior).
+    fn to_relative_path(&self, path: &PathBuf) -> PathBuf {
+        path.strip_prefix(self.tree.root()).unwrap_or(path).to_path_buf()
+    }
+
+    /// Resolves a path that arrived from the network (relative to the
+    /// *sending* peer's shar root) against this replica's own root. Safe to
+    /// call on an already-absolute path too -- `PathBuf::join` with an
+    /// absolute argument replaces the base instead of nesting incorrectly.
+    fn to_local_path(&self, path: &PathBuf) -> PathBuf {
+        self.tree.root().join(path)
     }
 
     /// Applies a locally-typed character. Assigns its real `(id, peer)` and
@@ -184,7 +242,8 @@ impl SharQueue {
                 } else {
                     self.clear_ide_backlog(id, peer).await;
                 }
-                let network_op = NetworkAdd::new(op.file_path.clone(), crdt.clone(), pos.0);
+                let network_op =
+                    NetworkAdd::new(self.to_relative_path(&op.file_path), crdt.clone(), pos.0);
                 (self.ide_add_callback.as_ref().unwrap())(network_op).await;
                 Ok(())
             }
@@ -210,7 +269,13 @@ impl SharQueue {
         let operation = self.remove_operation(op.clone());
 
         if let Some(_) = operation {
-            (self.ide_remove_callback.as_ref().unwrap())(op).await;
+            // op's file_path is this replica's own absolute path (correct
+            // for remove_operation above, which acts on this replica's own
+            // tree) -- but meaningless to a peer whose shar root lives
+            // somewhere else, so the outgoing copy travels relative instead.
+            let mut outgoing = op;
+            outgoing.file_path = self.to_relative_path(&outgoing.file_path);
+            (self.ide_remove_callback.as_ref().unwrap())(outgoing).await;
         }
     }
 
@@ -229,6 +294,13 @@ impl SharQueue {
     /// back into `clear_network_backlog` itself.
     async fn add_network_operation_inner(&mut self, op: NetworkAdd, clearing_worklist: bool) {
         tracing::debug!(?op, "add_network_operation called");
+        // op.file_path arrived relative to the *sending* peer's shar root,
+        // meaningless as a path on this filesystem -- resolve it against
+        // this replica's own root before using it for anything. Safe even
+        // if it's somehow already absolute (PathBuf::join with an absolute
+        // argument just replaces the base instead of nesting incorrectly).
+        let mut op = op;
+        op.file_path = self.to_local_path(&op.file_path);
         let crdt = op.crdt;
         let row = op.row;
         let file_path = op.file_path.clone();
@@ -245,7 +317,7 @@ impl SharQueue {
                         col = position.1,
                         "add_network_operation resolved position, clearing dependants"
                     );
-                    (self.network_add_callback.as_ref().unwrap())(position.0, position.1).await;
+                    (self.network_add_callback.as_ref().unwrap())(op).await;
 
                     if clearing_worklist {
                         if let Some(backlogged) = self.network_backlog.remove(&(crdt.id, crdt.peer))
@@ -286,10 +358,16 @@ impl SharQueue {
     /// Panics if `network_remove_callback` is `None` — only possible if this
     /// `SharQueue` wasn't built via [`Self::new`].
     pub async fn remove_network_operation(&mut self, op: Remove) {
+        // same reasoning as add_network_operation_inner -- op.file_path is
+        // relative to the sender's root, resolve it against this replica's
+        // own root before it touches the tree or goes back out to the IDE.
+        let mut op = op;
+        op.file_path = self.to_local_path(&op.file_path);
+        let op_clone = op.clone();
         let operation = self.remove_operation(op);
 
-        if let Some(op_frfr) = operation {
-            (self.network_remove_callback.as_ref().unwrap())(op_frfr.0, op_frfr.1).await;
+        if operation.is_some() {
+            (self.network_remove_callback.as_ref().unwrap())(op_clone).await;
         }
     }
 
@@ -338,23 +416,30 @@ impl SharQueue {
         let dependancies = self.network_backlog.remove(&(id, peer));
 
         if let Some(list) = dependancies {
-            self.network_worklist.append(&mut VecDeque::from(list));
-
-            while !self.network_worklist.is_empty() {
-                let item = self.network_worklist.pop_front().unwrap();
-                match item {
-                    NetworkOp::ADD(op) => {
-                        Box::pin(self.add_network_operation_inner(op, true)).await;
-                    }
-
-                    NetworkOp::REMOVE(op) => {
-                        self.remove_network_operation(op).await;
-                    }
-                }
-            }
+            self.network_worklist.extend(list);
+            self.drain_network_worklist().await;
         } else {
             // there's no dependancy list therefore nothing to do
             return;
+        }
+    }
+
+    /// Drains `network_worklist` until empty, retrying each item's tree
+    /// insertion/removal. Mirrors [`Self::drain_ide_worklist`] exactly,
+    /// except each item is a `NetworkOp` (add or remove) rather than always
+    /// an `IdeAdd`, so it has to dispatch on the variant.
+    async fn drain_network_worklist(&mut self) {
+        while !self.network_worklist.is_empty() {
+            let item = self.network_worklist.pop_front().unwrap();
+            match item {
+                NetworkOp::ADD(op) => {
+                    Box::pin(self.add_network_operation_inner(op, true)).await;
+                }
+
+                NetworkOp::REMOVE(op) => {
+                    self.remove_network_operation(op).await;
+                }
+            }
         }
     }
 

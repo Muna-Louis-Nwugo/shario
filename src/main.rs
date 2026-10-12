@@ -190,14 +190,6 @@ async fn iroh_gossip_subscriber(mut receiver: GossipReceiver) -> Result<(), ApiE
 async fn on_connect(socket: SocketRef) {
     tracing::info!(socket_id = %socket.id, "socket connected");
 
-    // Note: we log with plain `tracing::info!` events, not by entering a
-    // span and holding its guard across an `.await`. A span guard isn't
-    // `Send`, and each `.await` in these closures is a point where tokio
-    // can move the task to a different worker thread -- holding a guard
-    // across that either won't compile or attributes the span to the wrong
-    // task. `#[tracing::instrument]` sidesteps this (it re-enters the span
-    // around every poll), but it only works on named fns, not closures, so
-    // plain events are the simplest correct option here.
     socket.on(
         "join",
         async |socket: SocketRef, mut queue: State<QueueWrap>, Data::<Connect>(data)| {

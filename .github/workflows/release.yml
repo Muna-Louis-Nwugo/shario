@@ -44,6 +44,11 @@ jobs:
             target: x86_64-apple-darwin
             bin: shario
             artifact: shario-macos-x64
+          # Linux, x86_64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            bin: shario
+            artifact: shario-linux-x64
 
     runs-on: ${{ matrix.os }}
     steps:

@@ -10,6 +10,13 @@ name: Release
 # C code needing the real Windows headers). Windows 10 and Windows 11 use
 # the same Rust target per architecture (there's no separate "Windows 10"
 # target), so one x86_64 build and one arm64 build cover both.
+#
+# Linux targets are musl, not gnu -- a gnu build dynamically links against
+# whatever glibc version happens to be on the build runner (Ubuntu 24.04
+# ships glibc 2.39), which refuses to run at all on any system with an
+# older glibc (confirmed: `GLIBC_2.38' not found` on a real Ubuntu 22.04
+# machine). musl statically links its own libc into the binary instead, so
+# it runs on any Linux regardless of what's installed there.
 on:
   push:
     tags:
@@ -46,12 +53,12 @@ jobs:
             artifact: shario-macos-x64
           # Linux, x86_64
           - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
+            target: x86_64-unknown-linux-musl
             bin: shario
             artifact: shario-linux-x64
           # Linux, arm64
           - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
+            target: aarch64-unknown-linux-musl
             bin: shario
             artifact: shario-linux-arm64
 
@@ -63,8 +70,15 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Install musl tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
       - name: Build
         shell: bash
+        env:
+          CC_x86_64_unknown_linux_musl: musl-gcc
+          CC_aarch64_unknown_linux_musl: musl-gcc
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Rename binary

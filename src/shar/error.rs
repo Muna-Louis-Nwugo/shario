@@ -12,14 +12,6 @@ pub enum Error {
     #[error("ReadFail: {0}")]
     ReadFail(String),
 
-    /// Initialization failed.
-    #[error("InitFail: {0}")]
-    InitFail(String),
-
-    /// Referenced a peer or origin this replica doesn't recognize.
-    #[error("UnknownOrigin: {0}")]
-    UnknownOrigin(String),
-
     /// A lookup or index fell outside the valid range.
     #[error("OutOfBounds: {0}")]
     OutOfBounds(String),
@@ -30,8 +22,6 @@ impl PartialEq for Error {
         match (self, other) {
             (Self::Generic(a), Self::Generic(b)) => a == b,
             (Self::ReadFail(a), Self::ReadFail(b)) => a == b,
-            (Self::InitFail(a), Self::InitFail(b)) => a == b,
-            (Self::UnknownOrigin(a), Self::UnknownOrigin(b)) => a == b,
             (Self::OutOfBounds(a), Self::OutOfBounds(b)) => a == b,
             _ => false,
         }

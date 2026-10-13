@@ -3,37 +3,9 @@
 
 use std::fmt;
 
-use axum::extract::Path;
-
 use crate::shar::prelude::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-
-/// Diagnostic: how far `find_crdt`'s ring search has had to travel from its hint,
-/// cumulative across every call in this process. Ring-search cost scales linearly
-/// with this distance (measured separately, see `shario_perf_findings`), so this is
-/// how we check whether out-of-order processing under a burst is pushing hints far
-/// from their real position, rather than guessing.
-static RING_SEARCH_CALLS: AtomicU64 = AtomicU64::new(0);
-static RING_SEARCH_TOTAL_DISTANCE: AtomicU64 = AtomicU64::new(0);
-static RING_SEARCH_MAX_DISTANCE: AtomicU64 = AtomicU64::new(0);
-
-fn record_ring_search_distance(distance: usize) {
-    RING_SEARCH_CALLS.fetch_add(1, Ordering::Relaxed);
-    RING_SEARCH_TOTAL_DISTANCE.fetch_add(distance as u64, Ordering::Relaxed);
-    RING_SEARCH_MAX_DISTANCE.fetch_max(distance as u64, Ordering::Relaxed);
-}
-
-/// `(calls, total_distance, max_distance)` across every `find_crdt` call so far in
-/// this process. `total_distance / calls` is the mean ring-search distance.
-pub fn ring_search_diagnostics() -> (u64, u64, u64) {
-    (
-        RING_SEARCH_CALLS.load(Ordering::Relaxed),
-        RING_SEARCH_TOTAL_DISTANCE.load(Ordering::Relaxed),
-        RING_SEARCH_MAX_DISTANCE.load(Ordering::Relaxed),
-    )
-}
 
 /// Characters that end a projection line rather than occupying a column in one.
 fn is_line_break(c: char) -> bool {
@@ -151,7 +123,7 @@ impl SharFile {
     }
 
     /// Looks up the `(id, peer)` at `(line, column)`. `None` if out of bounds.
-    pub fn get_id_peer(&self, coordinates: (usize, usize)) -> Option<(IdSize, PeerIdSize)> {
+    pub fn _get_id_peer(&self, coordinates: (usize, usize)) -> Option<(IdSize, PeerIdSize)> {
         if coordinates.0 <= self.projection.len() - 1 {
             let val = self.projection[coordinates.0].get(coordinates.1);
 
@@ -192,7 +164,6 @@ impl SharFile {
         };
 
         if let Some(index) = line.iter().position(|&item| item == (id, peer)) {
-            record_ring_search_distance(0);
             Ok((line_num, index))
         } else {
             let mut up_offset = 1;
@@ -231,7 +202,6 @@ impl SharFile {
             while up_exhausted != true || down_exhausted != true {
                 match check_up() {
                     Ok((row, col)) => {
-                        record_ring_search_distance(line_num - row);
                         return Ok((row, col));
                     }
 
@@ -244,7 +214,6 @@ impl SharFile {
 
                 match check_down() {
                     Ok((row, col)) => {
-                        record_ring_search_distance(row - line_num);
                         return Ok((row, col));
                     }
 
@@ -660,7 +629,7 @@ impl SharDirectory {
     }
 
     /// Routes to `file_path`'s [`SharFile`] and delegates.
-    pub fn get_id_peer(
+    pub fn _get_id_peer(
         &mut self,
         file_path: &PathBuf,
         pos: (usize, usize),
@@ -668,7 +637,7 @@ impl SharDirectory {
         let path = file_path.iter();
 
         if let Some(file) = self.find_file(path) {
-            return Ok(file.get_id_peer(pos));
+            return Ok(file._get_id_peer(pos));
         } else {
             Err(Error::Generic(String::from("File not found")))
         }

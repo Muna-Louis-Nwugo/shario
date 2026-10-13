@@ -254,17 +254,17 @@ fn test_convergence_removes() {
     // agreed-upon: line 0 should be the sentinel + 'a','c' (b removed) + 'd','e','f'
     // folded up from the merged line 1, i.e. "acdef"; line 1 (formerly line 2)
     // should be its own anchor + 'h','i' ('g' removed), i.e. "hi"
-    assert_eq!(replica_a.get_id_peer((0, 0)), Some((0, 0)), "root sentinel");
-    assert_eq!(replica_a.get_id_peer((0, 1)), Some((1, 0)), "'a'");
-    assert_eq!(replica_a.get_id_peer((0, 2)), Some((3, 0)), "'c'");
-    assert_eq!(replica_a.get_id_peer((0, 3)), Some((5, 0)), "'d' folded up from the merged line");
-    assert_eq!(replica_a.get_id_peer((0, 4)), Some((6, 0)), "'e'");
-    assert_eq!(replica_a.get_id_peer((0, 5)), Some((7, 0)), "'f'");
-    assert_eq!(replica_a.get_id_peer((0, 6)), None, "line 0 should have exactly 6 entries");
-    assert_eq!(replica_a.get_id_peer((1, 0)), Some((8, 0)), "line 2's own anchor, now at row 1");
-    assert_eq!(replica_a.get_id_peer((1, 1)), Some((10, 0)), "'h'");
-    assert_eq!(replica_a.get_id_peer((1, 2)), Some((11, 0)), "'i'");
-    assert_eq!(replica_a.get_id_peer((2, 0)), None, "only 2 lines should remain after the merge");
+    assert_eq!(replica_a._get_id_peer((0, 0)), Some((0, 0)), "root sentinel");
+    assert_eq!(replica_a._get_id_peer((0, 1)), Some((1, 0)), "'a'");
+    assert_eq!(replica_a._get_id_peer((0, 2)), Some((3, 0)), "'c'");
+    assert_eq!(replica_a._get_id_peer((0, 3)), Some((5, 0)), "'d' folded up from the merged line");
+    assert_eq!(replica_a._get_id_peer((0, 4)), Some((6, 0)), "'e'");
+    assert_eq!(replica_a._get_id_peer((0, 5)), Some((7, 0)), "'f'");
+    assert_eq!(replica_a._get_id_peer((0, 6)), None, "line 0 should have exactly 6 entries");
+    assert_eq!(replica_a._get_id_peer((1, 0)), Some((8, 0)), "line 2's own anchor, now at row 1");
+    assert_eq!(replica_a._get_id_peer((1, 1)), Some((10, 0)), "'h'");
+    assert_eq!(replica_a._get_id_peer((1, 2)), Some((11, 0)), "'i'");
+    assert_eq!(replica_a._get_id_peer((2, 0)), None, "only 2 lines should remain after the merge");
 
     std::fs::remove_file(&path_a).expect("failed to delete scratch file a");
     std::fs::remove_file(&path_b).expect("failed to delete scratch file b");
@@ -285,47 +285,47 @@ fn test_get_id_peer() {
     // creating newline for every other line), so real content starts at index 1 —
     // spot-check known positions across every line, not just the first
     assert_eq!(
-        file.get_id_peer((0, 0)),
+        file._get_id_peer((0, 0)),
         Some((0, 0)),
         "(0, 0) is the root sentinel, not 'a'"
     );
     assert_eq!(
-        file.get_id_peer((0, 1)),
+        file._get_id_peer((0, 1)),
         Some((1, 0)),
         "'a' should be at (0, 1)"
     );
     assert_eq!(
-        file.get_id_peer((0, 9)),
+        file._get_id_peer((0, 9)),
         Some((9, 0)),
         "'#' should be at (0, 9)"
     );
     assert_eq!(
-        file.get_id_peer((1, 1)),
+        file._get_id_peer((1, 1)),
         Some((11, 0)),
         "'d' should be at (1, 1)"
     );
     assert_eq!(
-        file.get_id_peer((1, 9)),
+        file._get_id_peer((1, 9)),
         Some((19, 0)),
         "'^' should be at (1, 9)"
     );
     assert_eq!(
-        file.get_id_peer((2, 1)),
+        file._get_id_peer((2, 1)),
         Some((21, 0)),
         "'g' should be at (2, 1)"
     );
     assert_eq!(
-        file.get_id_peer((2, 9)),
+        file._get_id_peer((2, 9)),
         Some((29, 0)),
         "'(' should be at (2, 9)"
     );
     assert_eq!(
-        file.get_id_peer((3, 1)),
+        file._get_id_peer((3, 1)),
         Some((31, 0)),
         "'L' should be at (3, 1)"
     );
     assert_eq!(
-        file.get_id_peer((3, 4)),
+        file._get_id_peer((3, 4)),
         Some((34, 0)),
         "'T' should be at (3, 4)"
     );
@@ -333,21 +333,21 @@ fn test_get_id_peer() {
     // out of bounds in either dimension is None, not a panic — every line now has one
     // extra slot for its own anchor, so the boundary shifts out by one too
     assert_eq!(
-        file.get_id_peer((0, 10)),
+        file._get_id_peer((0, 10)),
         None,
         "line 0 only has 9 real characters plus its anchor"
     );
     assert_eq!(
-        file.get_id_peer((3, 5)),
+        file._get_id_peer((3, 5)),
         None,
         "line 3 only has 4 real characters plus its anchor"
     );
-    assert_eq!(file.get_id_peer((10, 0)), None, "there are only 4 lines");
+    assert_eq!(file._get_id_peer((10, 0)), None, "there are only 4 lines");
 
     // the id/peer this returns has to be usable as a real parent reference: look up
     // the last character of the last line, use it as a parent, and confirm the new
     // character lands right after it
-    let (parent_id, parent_peer) = file.get_id_peer((3, 4)).expect("'T' should still be there");
+    let (parent_id, parent_peer) = file._get_id_peer((3, 4)).expect("'T' should still be there");
     let c = CRDT::new(35, 0, CrdtRelation::new('!', parent_id, parent_peer));
     let position = file
         .add_crdt(3, c)
@@ -355,7 +355,7 @@ fn test_get_id_peer() {
     assert_eq!(position, Some((3, 5)), "'!' should land right after 'T'");
 
     assert_eq!(
-        file.get_id_peer((3, 5)),
+        file._get_id_peer((3, 5)),
         Some((35, 0)),
         "'!' should have landed right after 'T'"
     );
@@ -427,14 +427,14 @@ fn test_front_of_line_insert_ordering() {
 
     // final order must be: anchor, then strictly descending by id: 1999, 1500, 1050, 1010
     assert_eq!(
-        file.get_id_peer((new_line, 0)),
+        file._get_id_peer((new_line, 0)),
         Some((newline_id, 0)),
         "index 0 is still the line's own anchor"
     );
-    assert_eq!(file.get_id_peer((new_line, 1)), Some((1999, 0)));
-    assert_eq!(file.get_id_peer((new_line, 2)), Some((1500, 0)));
-    assert_eq!(file.get_id_peer((new_line, 3)), Some((1050, 0)));
-    assert_eq!(file.get_id_peer((new_line, 4)), Some((1010, 0)));
+    assert_eq!(file._get_id_peer((new_line, 1)), Some((1999, 0)));
+    assert_eq!(file._get_id_peer((new_line, 2)), Some((1500, 0)));
+    assert_eq!(file._get_id_peer((new_line, 3)), Some((1050, 0)));
+    assert_eq!(file._get_id_peer((new_line, 4)), Some((1010, 0)));
 
     std::fs::remove_file(&file_path).expect("failed to delete scratch file");
 }
@@ -518,7 +518,7 @@ fn nested_directories_are_routed_correctly() {
 
     // (0, 0) is the root sentinel now; 'a' is the first real character, at (0, 1)
     assert_eq!(
-        dir.get_id_peer(&file_path, (0, 1)).expect("routing failed"),
+        dir._get_id_peer(&file_path, (0, 1)).expect("routing failed"),
         Some((1, 0)),
         "'a' one directory level below the root should still be found"
     );
@@ -550,8 +550,8 @@ fn counter_is_shared_but_parents_stay_within_each_file() {
     // both files should have loaded successfully and independently, each with its
     // own first character correctly anchored on the sentinel, not on the other
     // file's last character
-    assert!(dir.get_id_peer(&file_a, (0, 0)).is_ok());
-    assert!(dir.get_id_peer(&file_b, (0, 0)).is_ok());
+    assert!(dir._get_id_peer(&file_a, (0, 0)).is_ok());
+    assert!(dir._get_id_peer(&file_b, (0, 0)).is_ok());
 
     std::fs::remove_file(&file_a).expect("failed to delete scratch file a");
     std::fs::remove_file(&file_b).expect("failed to delete scratch file b");
@@ -602,12 +602,12 @@ fn removing_a_newline_merges_lines_and_keeps_anchors_aligned() {
     file.remove_crdt(1, 2, 0)
         .expect("failed to remove first newline");
     assert_eq!(
-        file.get_id_peer((0, 2)),
+        file._get_id_peer((0, 2)),
         Some((3, 0)),
         "'b' should have merged onto line 0 right after 'a'"
     );
     assert_eq!(
-        file.get_id_peer((0, 1)),
+        file._get_id_peer((0, 1)),
         Some((1, 0)),
         "'a' should be undisturbed at (0, 1)"
     );
@@ -615,7 +615,7 @@ fn removing_a_newline_merges_lines_and_keeps_anchors_aligned() {
     // the tombstoned newline itself should not linger as a stale entry in the
     // merged line — projection is documented to drop tombstones immediately
     assert_eq!(
-        file.get_id_peer((0, 3)),
+        file._get_id_peer((0, 3)),
         None,
         "line 0 should have exactly the anchor, 'a', and 'b' — no leftover tombstone"
     );
@@ -625,7 +625,7 @@ fn removing_a_newline_merges_lines_and_keeps_anchors_aligned() {
     file.remove_crdt(1, 4, 0)
         .expect("failed to remove second newline");
     assert_eq!(
-        file.get_id_peer((0, 3)),
+        file._get_id_peer((0, 3)),
         Some((5, 0)),
         "'c' should have merged onto the single remaining line"
     );

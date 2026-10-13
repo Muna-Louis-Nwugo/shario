@@ -2,16 +2,9 @@
 
 pub use super::error::Error;
 use crate::types;
-use tokio::io;
 
 /// The crate-wide `Result` alias.
 pub type Result<T> = core::result::Result<T, Error>;
-
-/// Alias for `tokio::io::Result`.
-pub type IOResult<T> = io::Result<T>;
-
-/// Generic newtype wrapper.
-pub struct W<T>(pub T);
 
 // GLOBAL STRUCTS
 

@@ -16,20 +16,19 @@ mod tests;
 mod types;
 
 use futures_lite::StreamExt;
-use redis::{self, Commands, RedisError};
-use std::{cmp, io, ops::Index, str::FromStr};
+use redis::{self, Commands};
+use std::{cmp, io};
 use tokio::sync::mpsc::Sender;
 
 use axum::routing::get;
 use clap::{Parser, Subcommand};
-use iroh::{Endpoint, PublicKey, RelayMode, SecretKey, endpoint::presets, protocol::Router};
+use iroh::{Endpoint, RelayMode, SecretKey, endpoint::presets, protocol::Router};
 use iroh_gossip::{
     TopicId,
     api::{ApiError, Event, GossipReceiver, GossipTopic},
     net::Gossip,
-    proto::topic,
 };
-use rand::{self, Rng, random_range, seq::IndexedRandom};
+use rand::{self, Rng, seq::IndexedRandom};
 use tower::ServiceBuilder;
 use tower_http::cors::CorsLayer;
 
@@ -96,7 +95,9 @@ async fn main() -> io::Result<()> {
         // nothing to broadcast to in this mode -- just drain so
         // ide_add_callback/ide_remove_callback's sends never back up and block
         tokio::spawn(async move { while rx.recv().await.is_some() {} });
-        io.ns("/", |socket: SocketRef| on_connect(tx, shared_queue, socket));
+        io.ns("/", |socket: SocketRef| {
+            on_connect(tx, shared_queue, socket)
+        });
 
         let app = axum::Router::<()>::new()
             .route("/", get(async || println!("Connecting...")))
@@ -134,49 +135,48 @@ async fn main() -> io::Result<()> {
 
     let session_name;
 
-    let (topic, mut peers) = match args
-        .commmand
-        .as_ref()
-        .expect("a subcommand (create/participate) is required unless --socket-benchmark is set")
-    {
-        SharCommands::Create { name } => {
-            if let Some(shar_name) = name {
-                session_name = shar_name.clone();
-            } else {
-                session_name = petname::petname(3, "-").unwrap();
-                // prints the session name to be parsed by the client if neceessary
-                println!("{}", session_name);
+    let (topic, mut peers) =
+        match args.commmand.as_ref().expect(
+            "a subcommand (create/participate) is required unless --socket-benchmark is set",
+        ) {
+            SharCommands::Create { name } => {
+                if let Some(shar_name) = name {
+                    session_name = shar_name.clone();
+                } else {
+                    session_name = petname::petname(3, "-").unwrap();
+                    // prints the session name to be parsed by the client if neceessary
+                    println!("{}", session_name);
+                }
+                let topic_id = TopicId::from_bytes(rand::random());
+                let peers_vec = vec![];
+                let ticket = Ticket {
+                    topic: topic_id,
+                    peers: peers_vec.clone(),
+                };
+
+                // if this name is already in use,bail out
+                let exists: bool = con.exists(&session_name).unwrap_or(false);
+                if exists {
+                    return Err(io::Error::other("Session name already exists"));
+                }
+                // creates this name and its keys in the redis db
+                // the key will expire automatically after 24 hours
+                let _: () = con.set_ex(&session_name, ticket.to_bytes(), 86400).unwrap();
+                (topic_id, peers_vec)
             }
-            let topic_id = TopicId::from_bytes(rand::random());
-            let peers_vec = vec![];
-            let ticket = Ticket {
-                topic: topic_id,
-                peers: peers_vec.clone(),
-            };
 
-            // if this name is already in use,bail out
-            let exists: bool = con.exists(&session_name).unwrap_or(false);
-            if exists {
-                return Err(io::Error::other("Session name already exists"));
+            SharCommands::Participate { name } => {
+                session_name = name.clone();
+                let ticket_bytes: Vec<u8> = con
+                    .get(&session_name)
+                    .expect("This shar name doesn't exist");
+
+                let Ticket { topic, peers } =
+                    Ticket::from_bytes(&ticket_bytes).expect("Unable to generate tickets");
+
+                (topic, peers)
             }
-            // creates this name and its keys in the redis db
-            // the key will expire automatically after 24 hours
-            let _: () = con.set_ex(&session_name, ticket.to_bytes(), 86400).unwrap();
-            (topic_id, peers_vec)
-        }
-
-        SharCommands::Participate { name } => {
-            session_name = name.clone();
-            let ticket_bytes: Vec<u8> = con
-                .get(&session_name)
-                .expect("This shar name doesn't exist");
-
-            let Ticket { topic, peers } =
-                Ticket::from_bytes(&ticket_bytes).expect("Unable to generate tickets");
-
-            (topic, peers)
-        }
-    };
+        };
 
     // ==================================================================================
     // BELOW IS THE ACTUAL SERVER IMPLEMENTATION
@@ -346,7 +346,7 @@ async fn on_connect(producer: Sender<NetworkOp>, queue: QueueWrap, socket: Socke
     let producer_clone = producer.clone();
     socket.on("join", async move |socket: SocketRef, Data::<Connect>(data)| {
         tracing::info!(socket_id = %socket.id, local = data.local, path = ?data.path, "join");
-        let mut join_queue = queue_clone.clone();
+        let join_queue = queue_clone.clone();
         let join_producer = producer_clone.clone();
 
         // leave all existing rooms

@@ -194,22 +194,6 @@ impl IdeAddConfirmed {
     }
 }
 
-/// A broadcast
-#[derive(Debug, Deserialize, Serialize)]
-pub struct BroadcastMessage {
-    shar_id: String,
-    ip_address: IpAddr,
-}
-
-impl BroadcastMessage {
-    pub fn new(id: String, ip: IpAddr) -> Self {
-        BroadcastMessage {
-            shar_id: id,
-            ip_address: ip,
-        }
-    }
-}
-
 /// A ticket for purposes of signalling
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Ticket {

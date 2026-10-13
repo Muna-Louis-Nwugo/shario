@@ -13,7 +13,7 @@ name: Release
 on:
   push:
     tags:
-      - "v*"
+      - "shario_v*"
 
 permissions:
   contents: write

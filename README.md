@@ -14,6 +14,7 @@ A `shar` server holds the CRDT state for a directory and mediates every edit thr
 Read the full breakdown — every component, the wire protocol, and what's still unbuilt — in [`info/ARCHITECTURE.md`](info/ARCHITECTURE.md).
 
 ## Getting started
+Plugins should have the ability to start their own shar instance automatically when needed, but in case you need to start one manually, below are the instructions.
 
 Requires a local Rust toolchain (`cargo`) and Node.js (for the VS Code extension and the benchmark harness). Session discovery goes through a small proxy (see the sibling `shario-discovery-proxy` repo, not part of this one) rather than talking to a database directly — no setup needed for this, it defaults to the real deployment already.
 
@@ -30,6 +31,7 @@ cargo run -- participate <name>
 # needed to run more than one shario instance on the same machine
 ```
 
+Then you connect a plugin. Here is an example of doing this in shario-vscode
 ```bash
 # in shario-vscode: launch the extension in a VS Code Extension Development Host
 cd shario-vscode
@@ -37,12 +39,12 @@ code .
 # press F5, then run "Shar: Create" or "Shar: Participate" from the command palette
 ```
 
-Then just type or delete in a file inside the shar's directory — edits sync live to every other IDE connected to the same session, on this machine or another.
+Then, just type or delete in a file inside the shar's directory — edits sync live to every other IDE connected to the same session, on this machine or another.
 
 ## Project layout
 
 - `shario/` — the Rust server (this repo). `src/shar/core/tree.rs` is the CRDT itself; `src/shar/core/queue.rs` mediates between the IDE/network and the tree; `src/main.rs` is the axum/socketioxide server and wire protocol.
-- [`shario-vscode`](https://github.com/Muna-Louis-Nwugo/shario-vscode) — the VS Code extension client (`extension.js`), a sibling repo/directory, not part of this one.
+-  — the VS Code extension client (`extension.js`), a sibling repo/directory, not part of this one.
 - `bench/` — a benchmark harness that replays real [josephg/editing-traces](https://github.com/josephg/editing-traces) datasets through the actual server binary, over a real socket, to catch correctness/perf issues synthetic unit tests can't. See [`info/BENCHMARK.md`](info/BENCHMARK.md) for results and the harness's own comments for how to run it yourself.
 - `info/` — living documentation: [`ARCHITECTURE.md`](info/ARCHITECTURE.md) (how it's built), [`PLUGIN_SPECIFICATIONS.md`](info/PLUGIN_SPECIFICATIONS.md) (the wire contract between server and IDE plugin), [`TODO.md`](info/TODO.md) (what's planned/done, with reasoning), [`KNOWN_ISSUES.md`](info/KNOWN_ISSUES.md) (observed problems without a full fix yet), [`BENCHMARK.md`](info/BENCHMARK.md) (measured perf/correctness results).
 
@@ -53,6 +55,8 @@ Releases are tagged `shario_vMAJOR.MINOR.PATCH`. A bump in the first number (`MA
 ## Building a plugin for another editor
 
 Shario is meant to be IDE-agnostic. **If you want to build a plugin for a different editor, [`info/PLUGIN_SPECIFICATIONS.md`](info/PLUGIN_SPECIFICATIONS.md) is the specification to implement against. It covers every event, field, and invariant the server expects, independent of any particular editor's API.
+
+[`shario-vscode`](https://github.com/Muna-Louis-Nwugo/shario-vscode) is the reference. 
 
 ## Terminal usage
 

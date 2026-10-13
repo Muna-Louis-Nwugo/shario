@@ -4,6 +4,23 @@ The contract between a `shar` server and an IDE plugin. If you're building a new
 
 This document covers the **IDE side of the protocol only** (`"local"` room). It does not cover peer-to-peer network sync (`"network"` room) — that's a separate, not-yet-built contract for server-to-server communication, not something a plugin needs to implement.
 
+## Obtaining the binary
+
+A plugin downloads a pre-built `shario` binary from the project's [GitHub Releases](https://github.com/Muna-Louis-Nwugo/shario/releases), caches it somewhere persistent (outside the workspace, so it survives across projects), and only downloads again if that cached copy is missing. The latest release always has exactly one asset per supported platform/architecture, named:
+
+| Platform | Architecture | Asset name |
+|---|---|---|
+| Windows | x86_64 | `shario-windows-x64.exe` |
+| Windows | arm64 | `shario-windows-arm64.exe` |
+| macOS | Apple Silicon (arm64) | `shario-macos-arm64` |
+| macOS | Intel (x86_64) | `shario-macos-x64` |
+| Linux | x86_64 | `shario-linux-x64` |
+| Linux | arm64 | `shario-linux-arm64` |
+
+`https://github.com/Muna-Louis-Nwugo/shario/releases/latest/download/<asset-name>` always redirects to the correct file from whichever release is currently the newest *stable* one — no GitHub API call needed to find it. "Stable" matters here: releases marked pre-release (used for test/beta builds) are deliberately excluded from this, on purpose — a plugin checking for updates should never auto-update onto one (see the GitHub REST API's own `/releases/latest`, which has the same exclusion, if building an explicit version-check instead of just downloading). On macOS/Linux, the downloaded file needs its executable bit set (`chmod +x`) before it can be run; a fresh download never has it.
+
+Releases are tagged `shario_vMAJOR.MINOR.PATCH`. A bump in `MAJOR` means a breaking change was introduced — a plugin shouldn't treat that as a safe automatic update the way it would a minor/patch bump; see this project's own plugins (`shario-vscode`, `shario-nvim`) for how they handle this.
+
 ## Launching the server
 
 A plugin doesn't connect to a server that's just assumed to already be running — it's responsible for actually starting one, by running the `shario` binary with one of two subcommands:

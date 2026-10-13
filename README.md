@@ -46,6 +46,10 @@ Then just type or delete in a file inside the shar's directory — edits sync li
 - `bench/` — a benchmark harness that replays real [josephg/editing-traces](https://github.com/josephg/editing-traces) datasets through the actual server binary, over a real socket, to catch correctness/perf issues synthetic unit tests can't. See [`info/BENCHMARK.md`](info/BENCHMARK.md) for results and the harness's own comments for how to run it yourself.
 - `info/` — living documentation: [`ARCHITECTURE.md`](info/ARCHITECTURE.md) (how it's built), [`PLUGIN_SPECIFICATIONS.md`](info/PLUGIN_SPECIFICATIONS.md) (the wire contract between server and IDE plugin), [`TODO.md`](info/TODO.md) (what's planned/done, with reasoning), [`KNOWN_ISSUES.md`](info/KNOWN_ISSUES.md) (observed problems without a full fix yet), [`BENCHMARK.md`](info/BENCHMARK.md) (measured perf/correctness results).
 
+## Versioning
+
+Releases are tagged `shario_vMAJOR.MINOR.PATCH`. A bump in the first number (`MAJOR`) means a breaking change was introduced — anything built against an older major version isn't guaranteed to keep working. Minor/patch bumps don't break anything.
+
 ## Building a plugin for another editor
 
 Shario is meant to be IDE-agnostic. **If you want to build a plugin for a different editor, [`info/PLUGIN_SPECIFICATIONS.md`](info/PLUGIN_SPECIFICATIONS.md) is the specification to implement against. It covers every event, field, and invariant the server expects, independent of any particular editor's API.

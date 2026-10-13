@@ -49,6 +49,11 @@ jobs:
             target: x86_64-unknown-linux-gnu
             bin: shario
             artifact: shario-linux-x64
+          # Linux, arm64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            bin: shario
+            artifact: shario-linux-arm64
 
     runs-on: ${{ matrix.os }}
     steps:

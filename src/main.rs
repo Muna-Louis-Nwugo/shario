@@ -65,9 +65,14 @@ struct Args {
 
 /// Base URL of the session-discovery proxy (see the sibling
 /// `shario-discovery-proxy` repo) -- the only thing that holds the real
-/// Upstash credential now, so this binary doesn't have to. Not a secret
-/// itself, just baked in the same way `REDIS_URL` used to be.
-const DISCOVERY_PROXY_URL: &str = env!("DISCOVERY_PROXY_URL");
+/// Upstash credential now, so this binary doesn't have to. Not a secret, so
+/// it's fine to default to the real deployment here; `DISCOVERY_PROXY_URL`
+/// can still override it at compile time (e.g. to point at `wrangler dev`'s
+/// local URL instead).
+const DISCOVERY_PROXY_URL: &str = match option_env!("DISCOVERY_PROXY_URL") {
+    Some(url) => url,
+    None => "https://shario-discovery-proxy.shario-discovery-proxy.workers.dev",
+};
 
 #[derive(Debug, Subcommand)]
 enum SharCommands {
@@ -119,8 +124,7 @@ async fn main() -> io::Result<()> {
         return Ok(());
     }
 
-    // talks to the session-discovery proxy, not Redis directly -- see
-    // DISCOVERY_PROXY_URL's own doc comment
+    // talks to the session-discovery proxy
     let http_client = reqwest::Client::new();
 
     // THESE NEXT TWO ARE FOR IROH, I'M INITIALIZING THEM HERE SO I CAN USE THEM IN DISCOVERY
@@ -170,7 +174,9 @@ async fn main() -> io::Result<()> {
                     return Err(io::Error::other("Session name already exists"));
                 }
                 if !register_resp.status().is_success() {
-                    return Err(io::Error::other("Discovery proxy rejected session creation"));
+                    return Err(io::Error::other(
+                        "Discovery proxy rejected session creation",
+                    ));
                 }
                 (topic_id, peers_vec)
             }
@@ -282,7 +288,7 @@ async fn main() -> io::Result<()> {
                     .expect("couldn't set up gossip subscriber"),
             );
 
-            // add this shar to the db
+            // inform the discovery DB that we have connected
             peers.push(endpoint.id());
             let this_ticket = Ticket {
                 topic: topic,

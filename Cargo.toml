@@ -25,5 +25,5 @@ data-encoding = "2.11.1"
 tracing-appender = "0.2.5"
 clap = { version = "4.6.7", features = ["derive"] }
 anyhow = "1.0.104"
-redis = { version = "1.7.1", features = ["tls-native-tls"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls"] }
 

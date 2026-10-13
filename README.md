@@ -15,7 +15,7 @@ Read the full breakdown — every component, the wire protocol, and what's still
 
 ## Getting started
 
-Requires a local Rust toolchain (`cargo`), Node.js (for the VS Code extension and the benchmark harness), and a Redis instance for session discovery: set `REDIS_URL` in a `.env` file at the repo root (gitignored, not committed).
+Requires a local Rust toolchain (`cargo`) and Node.js (for the VS Code extension and the benchmark harness). Session discovery goes through a small proxy (see the sibling `shario-discovery-proxy` repo, not part of this one) rather than talking to a database directly — no setup needed for this, it defaults to the real deployment already.
 
 ```bash
 cd shario

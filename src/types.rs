@@ -3,7 +3,7 @@
 // GLOBAL VARIABLES
 
 use core::fmt;
-use std::{net::IpAddr, path::PathBuf, str::FromStr};
+use std::{path::PathBuf, str::FromStr};
 
 use iroh::PublicKey;
 use iroh_gossip::TopicId;

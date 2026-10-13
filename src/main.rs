@@ -16,7 +16,6 @@ mod tests;
 mod types;
 
 use futures_lite::StreamExt;
-use redis::{self, Commands};
 use std::{cmp, io};
 use tokio::sync::mpsc::Sender;
 
@@ -34,7 +33,7 @@ use tower_http::cors::CorsLayer;
 
 use socketioxide::{
     SocketIo,
-    extract::{Data, SocketRef, State},
+    extract::{Data, SocketRef},
 };
 
 use crate::{
@@ -63,6 +62,12 @@ struct Args {
     #[clap(long, default_value_t = false)]
     socket_benchmark: bool,
 }
+
+/// Base URL of the session-discovery proxy (see the sibling
+/// `shario-discovery-proxy` repo) -- the only thing that holds the real
+/// Upstash credential now, so this binary doesn't have to. Not a secret
+/// itself, just baked in the same way `REDIS_URL` used to be.
+const DISCOVERY_PROXY_URL: &str = env!("DISCOVERY_PROXY_URL");
 
 #[derive(Debug, Subcommand)]
 enum SharCommands {
@@ -114,12 +119,9 @@ async fn main() -> io::Result<()> {
         return Ok(());
     }
 
-    // connect to upstash redis db
-    let redis_url = env!("REDIS_URL");
-    let client = redis::Client::open(redis_url).expect("Unable to connect to database");
-    let mut con = client
-        .get_connection()
-        .expect("Unable to connect to database");
+    // talks to the session-discovery proxy, not Redis directly -- see
+    // DISCOVERY_PROXY_URL's own doc comment
+    let http_client = reqwest::Client::new();
 
     // THESE NEXT TWO ARE FOR IROH, I'M INITIALIZING THEM HERE SO I CAN USE THEM IN DISCOVERY
     // generates private key
@@ -154,22 +156,41 @@ async fn main() -> io::Result<()> {
                     peers: peers_vec.clone(),
                 };
 
-                // if this name is already in use,bail out
-                let exists: bool = con.exists(&session_name).unwrap_or(false);
-                if exists {
+                // registers this name with the discovery proxy; it's the one
+                // that actually enforces "already in use" atomically (see
+                // shario-discovery-proxy's own SET NX EX)
+                let register_resp = http_client
+                    .post(format!("{DISCOVERY_PROXY_URL}/sessions/{session_name}"))
+                    .body(ticket.to_bytes())
+                    .send()
+                    .await
+                    .expect("Unable to reach discovery proxy");
+
+                if register_resp.status() == reqwest::StatusCode::CONFLICT {
                     return Err(io::Error::other("Session name already exists"));
                 }
-                // creates this name and its keys in the redis db
-                // the key will expire automatically after 24 hours
-                let _: () = con.set_ex(&session_name, ticket.to_bytes(), 86400).unwrap();
+                if !register_resp.status().is_success() {
+                    return Err(io::Error::other("Discovery proxy rejected session creation"));
+                }
                 (topic_id, peers_vec)
             }
 
             SharCommands::Participate { name } => {
                 session_name = name.clone();
-                let ticket_bytes: Vec<u8> = con
-                    .get(&session_name)
-                    .expect("This shar name doesn't exist");
+                let lookup_resp = http_client
+                    .get(format!("{DISCOVERY_PROXY_URL}/sessions/{session_name}"))
+                    .send()
+                    .await
+                    .expect("Unable to reach discovery proxy");
+
+                if lookup_resp.status() == reqwest::StatusCode::NOT_FOUND {
+                    panic!("This shar name doesn't exist");
+                }
+                let ticket_bytes = lookup_resp
+                    .bytes()
+                    .await
+                    .expect("Unable to read discovery proxy response")
+                    .to_vec();
 
                 let Ticket { topic, peers } =
                     Ticket::from_bytes(&ticket_bytes).expect("Unable to generate tickets");
@@ -268,9 +289,14 @@ async fn main() -> io::Result<()> {
                 peers: peers.clone(),
             };
 
-            let _: () = con
-                .set_ex(&session_name, this_ticket.to_bytes(), 86400)
-                .unwrap();
+            http_client
+                .put(format!("{DISCOVERY_PROXY_URL}/sessions/{session_name}"))
+                .body(this_ticket.to_bytes())
+                .send()
+                .await
+                .expect("Unable to reach discovery proxy")
+                .error_for_status()
+                .expect("Discovery proxy rejected session update");
 
             // spin up the subscriber to the gossip protocol
             tokio::spawn(iroh_gossip_subscriber(
@@ -405,11 +431,13 @@ async fn on_connect(producer: Sender<NetworkOp>, queue: QueueWrap, socket: Socke
         },
     );
 
+    // another clone
+    let queue_clone3 = queue.clone();
     socket.on(
         "remove",
-        async |socket: SocketRef, queue: State<QueueWrap>, Data::<Remove>(data)| {
+        async move |socket: SocketRef, Data::<Remove>(data)| {
             tracing::debug!(socket_id = %socket.id, ?data, "remove received");
-            let _ = queue.remove_ide_operation(data).await;
+            let _ = queue_clone3.remove_ide_operation(data).await;
 
             tracing::debug!(socket_id = %socket.id, "remove received ");
         },

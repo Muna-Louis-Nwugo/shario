@@ -53,11 +53,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # checked out separately so driver.js can run the real, shipped
+      # extension.js against a fake-vscode.js shim -- rendering actual
+      # reconstructed document text at the end, not just raw event logs
+      - uses: actions/checkout@v4
+        with:
+          repository: Muna-Louis-Nwugo/shario-vscode
+          path: shario-vscode-repo
+
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+
+      - name: Install shario-vscode's dependencies
+        run: npm install
+        working-directory: shario-vscode-repo
 
       - name: Build shario
         run: cargo build
@@ -180,6 +192,14 @@ jobs:
         working-directory: runner_test
         run: |
           node debug_client.js "$(pwd)" "$FILE_PATH" "$MESSAGE" "$DURATION_SECONDS"
+
+      # debug_client.js above only ever logs raw per-character events. This
+      # runs the real extension.js (via fake-vscode.js) against the same
+      # still-running server to join fresh and print the actual
+      # reconstructed document -- full_state() means a fresh join already
+      # reflects everything that happened during the logging phase above.
+      - name: Render final document state
+        run: node .github/scripts/remote-debug/driver.js "shario-vscode-repo" "runner_test" "$FILE_PATH" 5
 
       - name: Shut down
         if: always()

@@ -178,6 +178,7 @@ pub async fn request_state(endpoint: &Endpoint, peer: EndpointAddr, queue: &Queu
             return;
         }
     };
+    tracing::info!(ops = state.len(), "state_received");
 
     for op in state {
         tracing::info!("message successfully received, applying now");

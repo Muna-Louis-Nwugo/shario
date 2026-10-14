@@ -34,6 +34,7 @@ impl QueueWrap {
         socket: SocketRef,
         tx: Sender<NetworkOp>,
     ) -> Result<(), Error> {
+        tracing::info!("new: entered");
         let socket1 = socket.clone();
         let socket2 = socket.clone();
         let socket3 = socket.clone();
@@ -51,7 +52,9 @@ impl QueueWrap {
             Box::new(move |op_broadcast| Box::pin(ide_add_callback(tx1.clone(), op_broadcast))),
             Box::new(move |remove| Box::pin(ide_remove_callback(tx2.clone(), remove))),
         )?;
+        tracing::info!("new: about to acquire queue write lock");
         let mut guard = self.queue.write().await; // locks the *shared* RwLock every clone points at
+        tracing::info!("new: acquired queue write lock");
         if guard.network_add_callback.is_none() {
             *guard = real_queue; // overwrites its contents, not the Arc itself
             self.queue_initialized
@@ -59,13 +62,16 @@ impl QueueWrap {
             drop(guard);
 
             // clear the queue
-            for msg in self.buffer.read().await.iter() {
+            let buffered = self.buffer.read().await;
+            tracing::info!(count = buffered.len(), "new: about to replay buffer");
+            for msg in buffered.iter() {
                 match msg {
                     NetworkOp::ADD(op) => self.add_network_operation(op.clone()).await,
 
                     NetworkOp::REMOVE(op) => self.remove_network_operation(op.clone()).await,
                 }
             }
+            tracing::info!("new: replay finished");
         }
         Ok(())
     }

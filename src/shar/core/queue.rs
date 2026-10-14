@@ -138,8 +138,21 @@ impl SharQueue {
         self.tree.identities()
     }
 
+    /// Used for a newly-joined peer's catch-up state request (see
+    /// state_request.rs). Paths come back relative to this shar's own root,
+    /// same as every other path that crosses to a peer -- `tree.full_state()`
+    /// itself only knows this replica's own absolute paths, which are
+    /// meaningless once they cross to a peer whose shar root lives
+    /// somewhere else entirely (confirmed: without this, a newly-joined
+    /// peer's entire catch-up backlogs forever on "file not found", since
+    /// `to_local_path` can't correct for an already-absolute path with no
+    /// relation to this replica's own root).
     pub fn full_state(&self) -> Vec<(PathBuf, HashMap<(IdSize, PeerIdSize), CrdtRelation>)> {
-        self.tree.full_state()
+        self.tree
+            .full_state()
+            .into_iter()
+            .map(|(path, chars)| (self.to_relative_path(&path), chars))
+            .collect()
     }
 
     /// Strips this shar's own root off an absolute path, for putting a file

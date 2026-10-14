@@ -1,0 +1,191 @@
+name: Remote Debug Peer
+
+# A genuinely separate machine to join a live shar session for debugging --
+# GitHub's own runner hardware, real internet routing, no relationship to
+# anyone's local dev environment (unlike e.g. a WSL sandbox, which looks
+# "remote" but isn't). Builds from the current branch, not a release
+# binary, so it always reflects whatever fix is being tested, released or
+# not.
+#
+# workflow_dispatch only -- never runs on push/PR/schedule. Only a human
+# with write access to this repo can start it, from the Actions tab or
+# `gh workflow run remote-debug-peer.yml`.
+on:
+  workflow_dispatch:
+    inputs:
+      session_name:
+        description: "Shar session name to join"
+        required: true
+        type: string
+      mode:
+        description: "Join an existing session, or create a new one"
+        required: true
+        type: choice
+        options: [participate, create]
+        default: participate
+      file_path:
+        description: "File (relative to the shar root) to read/type into"
+        required: true
+        type: string
+        default: test.txt
+      message:
+        description: "If set, types this message into file_path after joining"
+        required: false
+        type: string
+      duration_seconds:
+        description: "How long to stay connected and log incoming edits afterward"
+        required: false
+        type: number
+        default: 120
+
+jobs:
+  join:
+    runs-on: ubuntu-latest
+    env:
+      # passed as env vars, not interpolated straight into `run:` scripts --
+      # inputs.message in particular is free-text and could otherwise break
+      # out of a shell command (quotes, `$(...)`, etc.) if templated in directly
+      SESSION_NAME: ${{ inputs.session_name }}
+      MODE: ${{ inputs.mode }}
+      FILE_PATH: ${{ inputs.file_path }}
+      MESSAGE: ${{ inputs.message }}
+      DURATION_SECONDS: ${{ inputs.duration_seconds }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build shario
+        run: cargo build
+
+      - name: Set up test directory
+        run: |
+          mkdir -p "runner_test/$(dirname "$FILE_PATH")"
+          touch "runner_test/$FILE_PATH"
+
+      - name: Install socket.io-client
+        run: npm install socket.io-client
+        working-directory: runner_test
+
+      - name: Start shario (debug logging)
+        working-directory: runner_test
+        run: |
+          # disown so these survive past this step -- each `run:` block is
+          # its own shell, and a background job can get killed along with
+          # it otherwise, same gotcha hit earlier testing this locally
+          RUST_LOG=shario=debug "$GITHUB_WORKSPACE/target/debug/shario" --port 3000 \
+            "$MODE" "$SESSION_NAME" > server.log 2>&1 &
+          echo $! > server.pid
+          disown
+          # stream the server's own log into this step's visible output
+          tail -f server.log &
+          echo $! > tail.pid
+          disown
+
+      - name: Wait for it to come up
+        run: |
+          for i in $(seq 1 30); do
+            if (echo > /dev/tcp/127.0.0.1/3000) 2>/dev/null; then
+              echo "server is up"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "server never came up"
+          cat runner_test/server.log
+          exit 1
+
+      - name: Write the debug client script
+        run: |
+          cat > runner_test/debug_client.js <<'EOF'
+          const { io } = require("socket.io-client");
+          const path = require("path");
+
+          const DIR = path.resolve(process.argv[2]);
+          const FILE_REL = process.argv[3];
+          const MESSAGE = process.argv[4] || "";
+          const DURATION_MS = parseInt(process.argv[5], 10) * 1000;
+          const FILE = path.join(DIR, FILE_REL);
+
+          const socket = io("http://127.0.0.1:3000", { transports: ["websocket"] });
+
+          let lastParentId = null;
+          let lastParentPeer = null;
+          let tagCounter = 0;
+          const pendingTags = new Map();
+          let charIndex = 0;
+
+          function sendNextChar() {
+            if (!MESSAGE || charIndex >= MESSAGE.length) {
+              if (MESSAGE) console.log("[done typing]");
+              return;
+            }
+            const ch = MESSAGE[charIndex];
+            const tag = tagCounter++;
+            pendingTags.set(tag, ch);
+            socket.emit("ide-add", {
+              file_path: FILE,
+              parent_id: lastParentId,
+              parent_peer: lastParentPeer,
+              parent_tag: null,
+              val: ch,
+              tag,
+              line_hint: 0,
+            });
+            console.log(`[sending] "${ch}" (tag=${tag}, parent=(${lastParentId},${lastParentPeer}))`);
+          }
+
+          socket.on("connect", () => {
+            console.log("[connected] joining local for", DIR);
+            socket.emit("join", { local: true, path: DIR });
+          });
+
+          socket.on("connect_error", (err) => console.log("[connect_error]", err.message));
+
+          socket.on("initial-state", (data) => {
+            if (data.file_path !== FILE) return;
+            console.log("[initial-state]", JSON.stringify(data.lines));
+            const lastLine = data.lines[data.lines.length - 1];
+            const lastEntry = lastLine[lastLine.length - 1];
+            [lastParentId, lastParentPeer] = lastEntry;
+            sendNextChar();
+          });
+
+          socket.on("ide-add-confirmed", (data) => {
+            const ch = pendingTags.get(data.tag);
+            if (ch === undefined) return;
+            pendingTags.delete(data.tag);
+            console.log(`[confirmed] "${ch}" -> id=${data.id} peer=${data.peer}`);
+            lastParentId = data.id;
+            lastParentPeer = data.peer;
+            charIndex++;
+            sendNextChar();
+          });
+
+          socket.on("ide-add-failed", (data) => console.log("[ide-add-failed]", JSON.stringify(data)));
+          socket.on("network-add", (data) => console.log("[network-add]", JSON.stringify(data)));
+          socket.on("network-remove", (data) => console.log("[network-remove]", JSON.stringify(data)));
+
+          setTimeout(() => {
+            console.log("[duration elapsed, exiting]");
+            process.exit(0);
+          }, DURATION_MS);
+          EOF
+
+      - name: Run debug client
+        working-directory: runner_test
+        run: |
+          node debug_client.js "$(pwd)" "$FILE_PATH" "$MESSAGE" "$DURATION_SECONDS"
+
+      - name: Shut down
+        if: always()
+        working-directory: runner_test
+        run: |
+          [ -f tail.pid ] && kill "$(cat tail.pid)" 2>/dev/null || true
+          [ -f server.pid ] && kill "$(cat server.pid)" 2>/dev/null || true
+          echo "=== full server.log ==="
+          cat server.log || true

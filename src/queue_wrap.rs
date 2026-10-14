@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use socketioxide::extract::SocketRef;
 use tokio::sync::RwLock;
@@ -21,6 +22,8 @@ use crate::types::{CrdtRelation, IdeAdd, NetworkAdd, NetworkOp, Remove};
 #[derive(Clone, Default, Debug)]
 pub struct QueueWrap {
     queue: Arc<RwLock<SharQueue>>,
+    queue_initialized: Arc<AtomicBool>,
+    buffer: Arc<RwLock<Vec<NetworkOp>>>,
 }
 
 impl QueueWrap {
@@ -51,6 +54,18 @@ impl QueueWrap {
         let mut guard = self.queue.write().await; // locks the *shared* RwLock every clone points at
         if guard.network_add_callback.is_none() {
             *guard = real_queue; // overwrites its contents, not the Arc itself
+            self.queue_initialized
+                .store(true, std::sync::atomic::Ordering::Release);
+            drop(guard);
+
+            // clear the queue
+            for msg in self.buffer.read().await.iter() {
+                match msg {
+                    NetworkOp::ADD(op) => self.add_network_operation(op.clone()).await,
+
+                    NetworkOp::REMOVE(op) => self.remove_network_operation(op.clone()).await,
+                }
+            }
         }
         Ok(())
     }
@@ -66,13 +81,29 @@ impl QueueWrap {
     }
 
     pub async fn add_network_operation(&self, op: NetworkAdd) {
-        let mut queue = self.queue.write().await;
-        queue.add_network_operation(op).await
+        if self
+            .queue_initialized
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            let mut queue = self.queue.write().await;
+            queue.add_network_operation(op).await
+        } else {
+            let mut buff = self.buffer.write().await;
+            buff.push(NetworkOp::ADD(op));
+        }
     }
 
     pub async fn remove_network_operation(&self, op: Remove) {
-        let mut queue = self.queue.write().await;
-        queue.remove_network_operation(op).await
+        if self
+            .queue_initialized
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            let mut queue = self.queue.write().await;
+            queue.remove_network_operation(op).await
+        } else {
+            let mut buff = self.buffer.write().await;
+            buff.push(NetworkOp::REMOVE(op));
+        }
     }
 
     pub async fn identities(&self) -> Vec<(PathBuf, Vec<Vec<(IdSize, PeerIdSize)>>)> {

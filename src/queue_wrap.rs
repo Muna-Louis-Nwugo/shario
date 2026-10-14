@@ -85,10 +85,10 @@ impl QueueWrap {
             .queue_initialized
             .load(std::sync::atomic::Ordering::Acquire)
         {
-            tracing::info!("Queue isn't yet ready to recieve");
             let mut queue = self.queue.write().await;
             queue.add_network_operation(op).await
         } else {
+            tracing::info!("Queue isn't yet ready to recieve");
             let mut buff = self.buffer.write().await;
             buff.push(NetworkOp::ADD(op));
         }

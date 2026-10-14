@@ -181,7 +181,7 @@ pub async fn request_state(endpoint: &Endpoint, peer: EndpointAddr, queue: &Queu
     tracing::info!(ops = state.len(), "state_received");
 
     for op in state {
-        tracing::info!("message successfully received, applying now");
+        tracing::info!("catching up: applying op received from peer's state");
         match op {
             NetworkOp::ADD(op) => queue.add_network_operation(op).await,
             NetworkOp::REMOVE(op) => queue.remove_network_operation(op).await,

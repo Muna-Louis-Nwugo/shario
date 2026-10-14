@@ -50,7 +50,10 @@ require.cache[FAKE_VSCODE_ID] = {
   exports: vscode,
 };
 
-const extensionPath = path.join(VSCODE_REPO_DIR, "extension.js");
+// path.resolve first -- a relative VSCODE_REPO_DIR (as passed by the
+// GitHub Actions workflow) without a leading "./" would otherwise make
+// require() treat this as a bare module specifier instead of a file path
+const extensionPath = path.join(path.resolve(VSCODE_REPO_DIR), "extension.js");
 const ext = require(extensionPath);
 
 function printDocument(label) {

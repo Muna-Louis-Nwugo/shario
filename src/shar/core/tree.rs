@@ -524,7 +524,11 @@ impl SharFile {
     }
 
     pub fn full_state(&self) -> HashMap<(IdSize, PeerIdSize), CrdtRelation> {
-        return self.characters.clone();
+        let mut self_copy = self.characters.clone();
+
+        let _ = self_copy.remove(&(0, 0));
+
+        self_copy
     }
 }
 

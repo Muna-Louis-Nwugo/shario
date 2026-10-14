@@ -130,6 +130,7 @@ pub async fn request_state(endpoint: &Endpoint, peer: EndpointAddr, queue: &Queu
             return;
         }
     };
+    tracing::info!(peer = ?connection.remote_id(), "state request: connected to peer");
 
     let (mut send, mut recv) = match connection.open_bi().await {
         Ok(streams) => streams,

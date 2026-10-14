@@ -96,6 +96,7 @@ impl std::fmt::Debug for StateRequestHandler {
 impl ProtocolHandler for StateRequestHandler {
     async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
         let (mut send, _recv) = connection.accept_bi().await?;
+        tracing::info!(peer = ?connection.remote_id(), "state request: accepted connection from peer");
 
         let state = to_network_ops(self.queue.full_state().await);
 
@@ -111,6 +112,11 @@ impl ProtocolHandler for StateRequestHandler {
             .await
             .map_err(std::io::Error::other)?;
         send.finish()?;
+        tracing::info!(
+            peer = ?connection.remote_id(),
+            ops = state.len(),
+            "state request: sent state to peer"
+        );
 
         connection.closed().await;
         Ok(())

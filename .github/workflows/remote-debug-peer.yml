@@ -79,9 +79,14 @@ jobs:
           mkdir -p "runner_test/$(dirname "$FILE_PATH")"
           touch "runner_test/$FILE_PATH"
 
+      # installed at the repo root, not inside runner_test -- runner_test is
+      # the shar root, and SharDirectory::new() walks every file under it
+      # with no exclusions (node_modules included); confirmed this alone
+      # made a real join never complete (see info/TODO.md). Node still
+      # resolves require("socket.io-client") from debug_client.js (which
+      # runs with cwd=runner_test) by walking up to this node_modules.
       - name: Install socket.io-client
         run: npm install socket.io-client
-        working-directory: runner_test
 
       - name: Start shario (debug logging)
         working-directory: runner_test

@@ -388,7 +388,6 @@ async fn on_connect(producer: Sender<NetworkOp>, queue: QueueWrap, socket: Socke
         // join the appropriate room on the connect message
         if data.local {
             // creates a new "queue"
-            // right now, this is just a stub
             socket.join("local");
             if let Err(e) = join_queue
                 .clone()

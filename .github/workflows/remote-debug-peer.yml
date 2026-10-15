@@ -213,7 +213,7 @@ jobs:
       # reconstructed document -- full_state() means a fresh join already
       # reflects everything that happened during the logging phase above.
       - name: Render final document state
-        run: node .github/scripts/remote-debug/driver.js "shario-vscode-repo" "runner_test" "$FILE_PATH" 5
+        run: node .github/scripts/remote-debug/driver.js "shario-vscode-repo" "runner_test" "$FILE_PATH" 30
 
       - name: Shut down
         if: always()

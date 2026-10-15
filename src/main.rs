@@ -389,6 +389,7 @@ async fn on_connect(producer: Sender<NetworkOp>, queue: QueueWrap, socket: Socke
         if data.local {
             // creates a new "queue"
             // right now, this is just a stub
+            socket.join("local");
             if let Err(e) = join_queue
                 .clone()
                 .new(data.path, id, socket.clone(), join_producer)
@@ -396,7 +397,6 @@ async fn on_connect(producer: Sender<NetworkOp>, queue: QueueWrap, socket: Socke
             {
                 tracing::error!(socket_id = %socket.id, error = %e, "failed to initialize queue");
             }
-            socket.join("local");
 
             // tells the joining IDE the real (id, peer) behind every
             // character it didn't type itself -- see extension.js's

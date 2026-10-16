@@ -9,12 +9,28 @@ use crate::types::{IdeAddConfirmed, NetworkAdd, NetworkOp, Remove};
 
 pub async fn network_add_callback(socket: SocketRef, op: NetworkAdd) {
     tracing::debug!(?op, "add applied");
-    let _ = socket.within("local").emit("network-add", &op).await;
+    loop {
+        match socket.within("local").emit("network-add", &op).await {
+            Ok(_) => break,
+            Err(e) => {
+                tracing::warn!(?op, error = %e, "network-add emit failed, retrying");
+                tokio::time::sleep(std::time::Duration::from_micros(1)).await;
+            }
+        }
+    }
 }
 
 pub async fn network_remove_callback(socket: SocketRef, op: Remove) {
     tracing::debug!(?op, "remove applied");
-    let _ = socket.within("local").emit("network-remove", &op).await;
+    loop {
+        match socket.within("local").emit("network-remove", &op).await {
+            Ok(_) => break,
+            Err(e) => {
+                tracing::warn!(?op, error = %e, "network-remove emit failed, retrying");
+                tokio::time::sleep(std::time::Duration::from_micros(1)).await;
+            }
+        }
+    }
 }
 
 pub async fn ide_remove_callback(producer: Sender<NetworkOp>, op: Remove) {

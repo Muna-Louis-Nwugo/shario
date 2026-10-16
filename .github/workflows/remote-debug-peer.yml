@@ -116,6 +116,20 @@ jobs:
           cat runner_test/server.log
           exit 1
 
+      # Connects as soon as the server is up -- same as a real IDE opening
+      # right when the server starts, not showing up at the end hoping to
+      # catch the tail of what already happened. Backgrounded (same disown
+      # pattern as the server itself) so it's genuinely connected and
+      # listening for the whole test window, receiving "network-add" events
+      # live as the server emits them, instead of trying to catch up after
+      # the fact. Listens for DURATION_SECONDS, same window debug_client.js
+      # types into below.
+      - name: Start the real IDE client (driver.js)
+        run: |
+          node .github/scripts/remote-debug/driver.js "shario-vscode-repo" "runner_test" "$FILE_PATH" "$DURATION_SECONDS" > driver.log 2>&1 &
+          echo $! > driver.pid
+          disown
+
       - name: Write the debug client script
         run: |
           cat > runner_test/debug_client.js <<'EOF'
@@ -207,13 +221,25 @@ jobs:
             echo "server is NOT alive anymore (pid $(cat server.pid)) -- it died sometime during this run"
           fi
 
-      # debug_client.js above only ever logs raw per-character events. This
-      # runs the real extension.js (via fake-vscode.js) against the same
-      # still-running server to join fresh and print the actual
-      # reconstructed document -- full_state() means a fresh join already
-      # reflects everything that happened during the logging phase above.
-      - name: Render final document state
-        run: node .github/scripts/remote-debug/driver.js "shario-vscode-repo" "runner_test" "$FILE_PATH" 30
+      # driver.js has been connected and listening since right after the
+      # server came up (see "Start the real IDE client" above) -- wait for
+      # its own DURATION_SECONDS listen window to finish, then show what it
+      # actually captured live, rather than connecting fresh at this point
+      # and hoping to catch up on everything that already happened.
+      - name: Wait for the IDE client and show what it captured
+        run: |
+          if [ -f driver.pid ]; then
+            # driver.js listens for DURATION_SECONDS internally, plus a bit
+            # of its own startup/printing overhead -- wait at least that
+            # long, not a fixed guess, or a long DURATION_SECONDS would get
+            # cut off here before driver.js ever exits on its own.
+            for i in $(seq 1 $((DURATION_SECONDS + 15))); do
+              kill -0 "$(cat driver.pid)" 2>/dev/null || break
+              sleep 1
+            done
+          fi
+          echo "=== driver.js output ==="
+          cat driver.log || true
 
       - name: Shut down
         if: always()
@@ -226,5 +252,6 @@ jobs:
           fi
           [ -f tail.pid ] && kill "$(cat tail.pid)" 2>/dev/null || true
           [ -f server.pid ] && kill "$(cat server.pid)" 2>/dev/null || true
+          [ -f ../driver.pid ] && kill "$(cat ../driver.pid)" 2>/dev/null || true
           echo "=== full server.log ==="
           cat server.log || true

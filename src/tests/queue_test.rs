@@ -2,7 +2,78 @@ use crate::shar::core::queue::SharQueue;
 use crate::shar::prelude::{CRDT, CrdtRelation, IdSize, PeerIdSize};
 use crate::types::{IdeAdd, IdeAddConfirmed, NetworkAdd, Remove};
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::PathBuf;
+
+/// Stands in for a real IDE client, to check what the server's output
+/// actually reconstructs into -- not just that a callback fired with some
+/// expected fields, but that a client which does nothing smarter than
+/// "insert right after whatever identity I'm told" (exactly what
+/// shario-vscode's `applyNetworkAdd` does, now that the server resolves
+/// sibling tie-break itself) ends up with the correct document.
+///
+/// Deliberately a position-based splice, not a fixed id -> next-id map: a
+/// later-arriving sibling that tie-break places between two
+/// already-applied characters must still land correctly without touching
+/// either of their previously-sent identities. Splicing at the
+/// predecessor's *current* position handles that automatically, the same
+/// way the real client's array-based `cells` do.
+struct MockIdeClient {
+    lines: Vec<Vec<(IdSize, PeerIdSize)>>,
+    values: HashMap<(IdSize, PeerIdSize), char>,
+}
+
+impl MockIdeClient {
+    fn new() -> Self {
+        let mut values = HashMap::new();
+        values.insert((0, 0), '\0');
+        MockIdeClient { lines: vec![vec![(0, 0)]], values }
+    }
+
+    fn find(&self, id: IdSize, peer: PeerIdSize) -> (usize, usize) {
+        for (row, line) in self.lines.iter().enumerate() {
+            if let Some(col) = line.iter().position(|&entry| entry == (id, peer)) {
+                return (row, col);
+            }
+        }
+        panic!("mock IDE client: the server named a predecessor/target this client never saw: ({id}, {peer})");
+    }
+
+    fn apply_add(&mut self, op: &NetworkAdd) {
+        let relation = op.crdt.relation;
+        let (row, col) = self.find(relation.parent_id, relation.parent_peer);
+        let insert_at = col + 1;
+        self.values.insert((op.crdt.id, op.crdt.peer), relation.value);
+
+        if relation.value == '\n' {
+            let mut new_line = vec![(op.crdt.id, op.crdt.peer)];
+            new_line.extend(self.lines[row].split_off(insert_at));
+            self.lines.insert(row + 1, new_line);
+        } else {
+            self.lines[row].insert(insert_at, (op.crdt.id, op.crdt.peer));
+        }
+    }
+
+    fn apply_remove(&mut self, op: &Remove) {
+        let (row, col) = self.find(op.id, op.peer);
+        self.lines[row].remove(col);
+    }
+
+    /// Every line's index 0 is its anchor (the sentinel for line 0, that
+    /// line's own creating newline otherwise) -- never a rendered character.
+    fn text(&self) -> String {
+        let mut out = String::new();
+        for (row, line) in self.lines.iter().enumerate() {
+            if row > 0 {
+                out.push('\n');
+            }
+            for &(id, peer) in &line[1..] {
+                out.push(self.values[&(id, peer)]);
+            }
+        }
+        out
+    }
+}
 
 // SharQueue's callbacks are boxed closures with no captured state in these tests, so
 // there's nowhere to stash observed calls except somewhere outside the closure itself.
@@ -358,6 +429,93 @@ async fn remove_arriving_before_its_target_backlogs_then_resolves() {
     );
 
     teardown("scratch_queue_remove_before_add");
+}
+
+#[tokio::test]
+async fn mock_ide_client_reconstructs_concurrent_siblings_in_tie_break_order() {
+    // regression test for the predecessor-rewrite fix: a client that just
+    // inserts after whatever identity a "network-add" names (no tie-break
+    // logic of its own) must still end up with the right document, even
+    // when a later op needs to land *between* two already-applied
+    // characters rather than just at the end.
+    //
+    // Starts from an empty file and adds every character -- including 'a'
+    // itself -- as a network op, so the mock client only ever learns about
+    // identities the same way a real one would: through the callback
+    // stream, never from content it was pre-loaded with.
+    let (mut queue, file_path) = setup("scratch_queue_mock_ide_tie_break", "");
+    let mut ide = MockIdeClient::new();
+
+    let a = NetworkAdd::new(file_path.clone(), CRDT::new(1, 0, CrdtRelation::new('a', 0, 0)), 0);
+    queue.add_network_operation(a).await;
+    ide.apply_add(&add_calls()[0]);
+
+    // 'X' (id 50) parents directly on 'a' (id 1) and, since nothing else is
+    // there yet, lands right after it
+    let x = NetworkAdd::new(file_path.clone(), CRDT::new(50, 1, CrdtRelation::new('X', 1, 0)), 0);
+    queue.add_network_operation(x).await;
+    ide.apply_add(&add_calls()[1]);
+    assert_eq!(ide.text(), "aX");
+
+    // 'Y' (id 60) also parents directly on 'a' -- larger id wins the tie,
+    // so it must land between 'a' and the already-applied 'X', not after it
+    let y = NetworkAdd::new(file_path, CRDT::new(60, 2, CrdtRelation::new('Y', 1, 0)), 0);
+    queue.add_network_operation(y).await;
+    ide.apply_add(&add_calls()[2]);
+
+    assert_eq!(
+        ide.text(),
+        "aYX",
+        "a client with no tie-break logic of its own should still reconstruct the server's real order"
+    );
+
+    teardown("scratch_queue_mock_ide_tie_break");
+}
+
+#[tokio::test]
+async fn mock_ide_client_reconstructs_across_a_line_split() {
+    let (mut queue, file_path) = setup("scratch_queue_mock_ide_newline", "");
+    let mut ide = MockIdeClient::new();
+
+    let a = NetworkAdd::new(file_path.clone(), CRDT::new(1, 0, CrdtRelation::new('a', 0, 0)), 0);
+    queue.add_network_operation(a).await;
+    ide.apply_add(&add_calls()[0]);
+
+    let b = NetworkAdd::new(file_path.clone(), CRDT::new(2, 0, CrdtRelation::new('b', 1, 0)), 0);
+    queue.add_network_operation(b).await;
+    ide.apply_add(&add_calls()[1]);
+    assert_eq!(ide.text(), "ab");
+
+    // a newline parented on 'a' (id 1) splits "ab" into "a\nb"
+    let newline = NetworkAdd::new(file_path, CRDT::new(50, 1, CrdtRelation::new('\n', 1, 0)), 0);
+    queue.add_network_operation(newline).await;
+    ide.apply_add(&add_calls()[2]);
+
+    assert_eq!(ide.text(), "a\nb");
+
+    teardown("scratch_queue_mock_ide_newline");
+}
+
+#[tokio::test]
+async fn mock_ide_client_reconstructs_after_a_remove() {
+    let (mut queue, file_path) = setup("scratch_queue_mock_ide_remove", "");
+    let mut ide = MockIdeClient::new();
+
+    let a = NetworkAdd::new(file_path.clone(), CRDT::new(1, 0, CrdtRelation::new('a', 0, 0)), 0);
+    queue.add_network_operation(a).await;
+    ide.apply_add(&add_calls()[0]);
+
+    let b = NetworkAdd::new(file_path.clone(), CRDT::new(2, 0, CrdtRelation::new('b', 1, 0)), 0);
+    queue.add_network_operation(b).await;
+    ide.apply_add(&add_calls()[1]);
+    assert_eq!(ide.text(), "ab");
+
+    queue.remove_network_operation(Remove::new(file_path, 1, 0, 0)).await;
+    ide.apply_remove(&remove_calls()[0]);
+
+    assert_eq!(ide.text(), "b", "removing 'a' should leave just 'b'");
+
+    teardown("scratch_queue_mock_ide_remove");
 }
 
 #[tokio::test]

@@ -323,6 +323,10 @@ impl SharQueue {
         let file_path = op.file_path.clone();
         self.counter = std::cmp::max(self.counter, crdt.id);
 
+        if (crdt.id, crdt.peer) == (0, 0) {
+            return;
+        }
+
         // add crdt
         let pos = self.tree.add_crdt(&file_path, row, crdt);
 

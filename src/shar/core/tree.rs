@@ -137,6 +137,26 @@ impl SharFile {
         }
     }
 
+    /// The identity immediately before `position` in final rendered order. Notably, not the CRDT's
+    /// parent. If character is the first in its line, its predecessor is the last character of the
+    /// previous line
+    pub fn predecessor_identity(&self, position: (usize, usize)) -> Option<(IdSize, PeerIdSize)> {
+        let (row, col) = position;
+
+        let val = if col > 0 {
+            self.projection.get(row).and_then(|line| line.get(col - 1))
+        } else {
+            row.checked_sub(1)
+                .and_then(|prev_row| self.projection.get(prev_row))
+                .and_then(|line| line.last())
+        };
+
+        match val {
+            Some((id, peer)) => Some((id.clone(), peer.clone())),
+            None => None,
+        }
+    }
+
     /// Finds `(id, peer)`'s current position, ring-searching outward from
     /// `line_num` (a hint, not ground truth) until it's found.
     fn find_crdt(
@@ -642,6 +662,21 @@ impl SharDirectory {
 
         if let Some(file) = self.find_file(path) {
             return Ok(file._get_id_peer(pos));
+        } else {
+            Err(Error::Generic(String::from("File not found")))
+        }
+    }
+
+    /// Routes to `file_path`'s [`SharFile`] and delegates.
+    pub fn predecessor_identity(
+        &mut self,
+        file_path: &PathBuf,
+        position: (usize, usize),
+    ) -> Result<Option<(IdSize, PeerIdSize)>> {
+        let path = file_path.iter();
+
+        if let Some(file) = self.find_file(path) {
+            return Ok(file.predecessor_identity(position));
         } else {
             Err(Error::Generic(String::from("File not found")))
         }

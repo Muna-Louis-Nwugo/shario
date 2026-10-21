@@ -161,7 +161,9 @@ impl SharQueue {
     /// Falls back to the path as-is if it somehow isn't under this shar's
     /// root at all (shouldn't happen under correct IDE behavior).
     fn to_relative_path(&self, path: &PathBuf) -> PathBuf {
-        path.strip_prefix(self.tree.root()).unwrap_or(path).to_path_buf()
+        path.strip_prefix(self.tree.root())
+            .unwrap_or(path)
+            .to_path_buf()
     }
 
     /// Resolves a path that arrived from the network (relative to the
@@ -182,6 +184,7 @@ impl SharQueue {
         self.counter += 1;
         let id = self.counter;
         let peer = self.peer;
+
         self.tag_identities.insert(op.tag, (id, peer));
 
         (self.ide_add_confirm_callback.as_ref().unwrap())(IdeAddConfirmed::new(op.tag, id, peer))
@@ -230,6 +233,7 @@ impl SharQueue {
                 parent_tag,
                 "add_ide_operation_inner backlogged, parent tag not seen yet"
             );
+
             self.ide_tag_backlog
                 .entry(parent_tag)
                 .or_insert_with(Vec::new)
@@ -330,6 +334,16 @@ impl SharQueue {
                         col = position.1,
                         "add_network_operation resolved position, clearing dependants"
                     );
+
+                    // give the IDE the predecessor as the character's parent so it doesn't have to
+                    // perform CRDT tie-breaks
+                    if let Ok(Some((id, peer))) =
+                        self.tree.predecessor_identity(&file_path, position)
+                    {
+                        op.crdt.relation.parent_id = id;
+                        op.crdt.relation.parent_peer = peer;
+                    }
+
                     (self.network_add_callback.as_ref().unwrap())(op).await;
 
                     if clearing_worklist {
@@ -391,6 +405,10 @@ impl SharQueue {
         let id = op_clone.id;
         let peer = op_clone.peer;
         let row = op_clone.row;
+
+        if (id, peer) == (0, 0) {
+            return None;
+        }
 
         let removed = self.tree.remove_crdt(&file_path, row, id, peer);
 

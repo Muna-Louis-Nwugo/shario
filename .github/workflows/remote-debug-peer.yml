@@ -98,13 +98,29 @@ jobs:
 
       - name: Wait for the client's server to come up
         run: |
+          # cargo build's own "Compiling ..." progress output is buffered
+          # (not line-buffered) once stdout isn't a TTY -- client.log
+          # inheriting a regular file counts -- so if something kills the
+          # whole process group outright (OOM, say) mid-build, all of that
+          # buffered output is lost and client.log shows only whatever our
+          # own console.log calls already flushed. That'd look identical to
+          # a build that failed instantly, so dump memory/OOM evidence here
+          # rather than guess which one actually happened.
+          dump_diagnostics() {
+            echo "=== free -h ==="
+            free -h || true
+            echo "=== dmesg (oom/kill evidence) ==="
+            (sudo dmesg --ctime 2>/dev/null || dmesg --ctime 2>/dev/null) | grep -iE "killed process|out of memory|oom" | tail -n 40
+            echo "=== client.log ==="
+            cat client.log || true
+          }
           for i in $(seq 1 120); do
             [ -f server_ready ] && echo "server is up" && exit 0
-            kill -0 "$(cat client.pid)" 2>/dev/null || { echo "client.js exited before the server came up"; cat client.log; exit 1; }
+            kill -0 "$(cat client.pid)" 2>/dev/null || { echo "client.js exited before the server came up"; dump_diagnostics; exit 1; }
             sleep 1
           done
           echo "server never came up"
-          cat client.log
+          dump_diagnostics
           exit 1
 
       - name: Write the debug client script

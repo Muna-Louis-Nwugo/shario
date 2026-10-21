@@ -37,7 +37,9 @@ use crate::types::{CrdtRelation, NetworkAdd, NetworkOp, Remove};
 /// following remove) per character. `row` is just a ring-search hint and
 /// has no bearing on correctness (see `tree.rs`), so `0` is a safe default
 /// for a one-shot bulk transfer like this.
-fn to_network_ops(state: Vec<(PathBuf, HashMap<(IdSize, PeerIdSize), CrdtRelation>)>) -> Vec<NetworkOp> {
+fn to_network_ops(
+    state: Vec<(PathBuf, HashMap<(IdSize, PeerIdSize), CrdtRelation>)>,
+) -> Vec<NetworkOp> {
     let mut ops = Vec::new();
     for (file_path, characters) in state {
         for ((id, peer), relation) in characters {
@@ -52,7 +54,12 @@ fn to_network_ops(state: Vec<(PathBuf, HashMap<(IdSize, PeerIdSize), CrdtRelatio
                 0,
             )));
             if deleted {
-                ops.push(NetworkOp::REMOVE(Remove::new(file_path.clone(), id, peer, 0)));
+                ops.push(NetworkOp::REMOVE(Remove::new(
+                    file_path.clone(),
+                    id,
+                    peer,
+                    0,
+                )));
             }
         }
     }
@@ -89,7 +96,8 @@ impl StateRequestHandler {
 // instead of derived so this doesn't force `Debug` all the way down.
 impl std::fmt::Debug for StateRequestHandler {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("StateRequestHandler").finish_non_exhaustive()
+        f.debug_struct("StateRequestHandler")
+            .finish_non_exhaustive()
     }
 }
 

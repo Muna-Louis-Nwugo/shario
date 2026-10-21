@@ -27,7 +27,7 @@ use iroh_gossip::{
     api::{ApiError, Event, GossipReceiver, GossipTopic},
     net::Gossip,
 };
-use rand::{self, Rng, seq::IndexedRandom};
+use rand::{self, Rng, seq::SliceRandom};
 use tower::ServiceBuilder;
 use tower_http::cors::CorsLayer;
 
@@ -217,28 +217,6 @@ async fn main() -> io::Result<()> {
     // the netowrk
     let shared_queue_network = shared_queue.clone();
 
-    // let discovery happen
-    let mut random_generator = rand::rng();
-    let mut discovery_peers = peers.clone();
-    let mut num_discovery_peers = cmp::min(3, discovery_peers.len());
-
-    while num_discovery_peers > 0 {
-        //selects a random peer
-        let random_peer = discovery_peers.choose(&mut random_generator).unwrap();
-
-        // hydration
-        request_state(&endpoint, (*random_peer).into(), &shared_queue_discovery).await;
-
-        let _ = discovery_peers.remove(
-            discovery_peers
-                .iter()
-                .position(|&x| x == (*random_peer))
-                .unwrap(),
-        );
-
-        num_discovery_peers -= 1;
-    }
-
     let (layer, io) = SocketIo::builder()
         // provides the state that is the queue and tree to the server
         .build_layer();
@@ -263,62 +241,78 @@ async fn main() -> io::Result<()> {
 
     // IROH
     tokio::spawn(async move {
-        {
-            // handles state requests
-            let state_request_handler =
-                state_request::StateRequestHandler::new(shared_queue_discovery);
+        // handles state requests&
+        let state_request_handler =
+            state_request::StateRequestHandler::new(shared_queue_discovery.clone());
 
-            // set up for the gossip protocol
-            let gossip = Gossip::builder().spawn(endpoint.clone());
+        // set up for the gossip protocol
+        let gossip = Gossip::builder().spawn(endpoint.clone());
 
-            let router = Router::builder(endpoint.clone())
-                .accept(iroh_gossip::ALPN, gossip.clone())
-                .accept(
-                    state_request::STATE_REQUEST_ALPN,
-                    state_request_handler.clone(),
-                )
-                .spawn();
+        let router = Router::builder(endpoint.clone())
+            .accept(iroh_gossip::ALPN, gossip.clone())
+            .accept(
+                state_request::STATE_REQUEST_ALPN,
+                state_request_handler.clone(),
+            )
+            .spawn();
 
-            // creates a new gossip topic
+        // creates a new gossip topic
 
-            let (sender, receiver) = GossipTopic::split(
-                gossip
-                    .subscribe(topic, peers.clone())
-                    .await
-                    .expect("couldn't set up gossip subscriber"),
-            );
+        // let discovery happen
+        // shuffled up front, synchronously -- ThreadRng isn't Send, so
+        // holding one across the `.await` below (via a `.choose()` call per
+        // iteration) would make this whole spawned future not Send
+        let mut discovery_peers = peers.clone();
+        discovery_peers.shuffle(&mut rand::rng());
+        let mut num_discovery_peers = cmp::min(3, discovery_peers.len());
 
-            // inform the discovery DB that we have connected
-            peers.push(endpoint.id());
-            let this_ticket = Ticket {
-                topic: topic,
-                peers: peers.clone(),
-            };
+        while num_discovery_peers > 0 {
+            // already shuffled, so just take from the front
+            let random_peer = discovery_peers.remove(0);
 
-            http_client
-                .put(format!("{DISCOVERY_PROXY_URL}/sessions/{session_name}"))
-                .body(this_ticket.to_bytes())
-                .send()
-                .await
-                .expect("Unable to reach discovery proxy")
-                .error_for_status()
-                .expect("Discovery proxy rejected session update");
+            // hydration
+            request_state(&endpoint, random_peer.into(), &shared_queue_discovery).await;
 
-            // spin up the subscriber to the gossip protocol
-            tokio::spawn(iroh_gossip_subscriber(
-                receiver,
-                endpoint.clone(),
-                shared_queue_network,
-            ));
-
-            while let Some(received) = rx.recv().await {
-                let _ = sender
-                    .broadcast(axum::body::Bytes::from(received.serialize()))
-                    .await;
-            }
-
-            router.shutdown().await.expect("Unable to shutdown router");
+            num_discovery_peers -= 1;
         }
+
+        let (sender, receiver) = GossipTopic::split(
+            gossip
+                .subscribe(topic, peers.clone())
+                .await
+                .expect("couldn't set up gossip subscriber"),
+        );
+
+        // inform the discovery DB that we have connected
+        peers.push(endpoint.id());
+        let this_ticket = Ticket {
+            topic: topic,
+            peers: peers.clone(),
+        };
+
+        http_client
+            .put(format!("{DISCOVERY_PROXY_URL}/sessions/{session_name}"))
+            .body(this_ticket.to_bytes())
+            .send()
+            .await
+            .expect("Unable to reach discovery proxy")
+            .error_for_status()
+            .expect("Discovery proxy rejected session update");
+
+        // spin up the subscriber to the gossip protocol
+        tokio::spawn(iroh_gossip_subscriber(
+            receiver,
+            endpoint.clone(),
+            shared_queue_network,
+        ));
+
+        while let Some(received) = rx.recv().await {
+            let _ = sender
+                .broadcast(axum::body::Bytes::from(received.serialize()))
+                .await;
+        }
+
+        router.shutdown().await.expect("Unable to shutdown router");
     });
 
     // Sets up the IDE listener

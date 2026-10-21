@@ -53,9 +53,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # checked out separately so driver.js can run the real, shipped
+      # checked out separately so client.js can run the real, shipped
       # extension.js against a fake-vscode.js shim -- rendering actual
-      # reconstructed document text at the end, not just raw event logs
+      # reconstructed document text, not just raw event logs. Never modified.
       - uses: actions/checkout@v4
         with:
           repository: Muna-Louis-Nwugo/shario-vscode
@@ -71,14 +71,6 @@ jobs:
         run: npm install
         working-directory: shario-vscode-repo
 
-      - name: Build shario
-        run: cargo build
-
-      - name: Set up test directory
-        run: |
-          mkdir -p "runner_test/$(dirname "$FILE_PATH")"
-          touch "runner_test/$FILE_PATH"
-
       # installed at the repo root, not inside runner_test -- runner_test is
       # the shar root, and SharDirectory::new() walks every file under it
       # with no exclusions (node_modules included); confirmed this alone
@@ -88,47 +80,32 @@ jobs:
       - name: Install socket.io-client
         run: npm install socket.io-client
 
-      - name: Start shario (debug logging)
-        working-directory: runner_test
+      # client.js owns the whole server lifecycle itself -- cargo build,
+      # spawn, wait for the port -- so there's no cross-step timing gap
+      # between "server becomes reachable" and "a local IDE joins it".
+      # Backgrounded (disowned, since each `run:` block is its own shell)
+      # so it stays connected and listening for the whole test window,
+      # writing the actual reconstructed document to client_output.txt on
+      # every change, rather than connecting fresh at the end and hoping to
+      # catch up on everything that already happened.
+      - name: Start the client
         run: |
-          # disown so these survive past this step -- each `run:` block is
-          # its own shell, and a background job can get killed along with
-          # it otherwise, same gotcha hit earlier testing this locally
-          RUST_LOG=shario=debug "$GITHUB_WORKSPACE/target/debug/shario" --port 3000 \
-            "$MODE" "$SESSION_NAME" > server.log 2>&1 &
-          echo $! > server.pid
-          disown
-          # stream the server's own log into this step's visible output
-          tail -f server.log &
-          echo $! > tail.pid
+          node .github/scripts/remote-debug/client.js "." "shario-vscode-repo" "$MODE" "$SESSION_NAME" \
+            3000 "runner_test" "$FILE_PATH" "client_output.txt" "server_ready" "$DURATION_SECONDS" \
+            > client.log 2>&1 &
+          echo $! > client.pid
           disown
 
-      - name: Wait for it to come up
+      - name: Wait for the client's server to come up
         run: |
-          for i in $(seq 1 30); do
-            if (echo > /dev/tcp/127.0.0.1/3000) 2>/dev/null; then
-              echo "server is up"
-              exit 0
-            fi
+          for i in $(seq 1 120); do
+            [ -f server_ready ] && echo "server is up" && exit 0
+            kill -0 "$(cat client.pid)" 2>/dev/null || { echo "client.js exited before the server came up"; cat client.log; exit 1; }
             sleep 1
           done
           echo "server never came up"
-          cat runner_test/server.log
+          cat client.log
           exit 1
-
-      # Connects as soon as the server is up -- same as a real IDE opening
-      # right when the server starts, not showing up at the end hoping to
-      # catch the tail of what already happened. Backgrounded (same disown
-      # pattern as the server itself) so it's genuinely connected and
-      # listening for the whole test window, receiving "network-add" events
-      # live as the server emits them, instead of trying to catch up after
-      # the fact. Listens for DURATION_SECONDS, same window debug_client.js
-      # types into below.
-      - name: Start the real IDE client (driver.js)
-        run: |
-          node .github/scripts/remote-debug/driver.js "shario-vscode-repo" "runner_test" "$FILE_PATH" "$DURATION_SECONDS" > driver.log 2>&1 &
-          echo $! > driver.pid
-          disown
 
       - name: Write the debug client script
         run: |
@@ -213,45 +190,34 @@ jobs:
           node debug_client.js "$(pwd)" "$FILE_PATH" "$MESSAGE" "$DURATION_SECONDS"
 
       - name: Check server liveness
-        working-directory: runner_test
         run: |
-          if kill -0 "$(cat server.pid)" 2>/dev/null; then
-            echo "server still alive (pid $(cat server.pid))"
+          if kill -0 "$(cat client.pid)" 2>/dev/null; then
+            echo "client (and its server) still alive (pid $(cat client.pid))"
           else
-            echo "server is NOT alive anymore (pid $(cat server.pid)) -- it died sometime during this run"
+            echo "client is NOT alive anymore (pid $(cat client.pid)) -- it or its server died sometime during this run"
           fi
 
-      # driver.js has been connected and listening since right after the
-      # server came up (see "Start the real IDE client" above) -- wait for
-      # its own DURATION_SECONDS listen window to finish, then show what it
-      # actually captured live, rather than connecting fresh at this point
-      # and hoping to catch up on everything that already happened.
-      - name: Wait for the IDE client and show what it captured
+      # client.js has been connected and listening since right after its own
+      # server came up -- wait for its own DURATION_SECONDS listen window to
+      # finish, then show what it actually captured live.
+      - name: Wait for the client and show what it captured
         run: |
-          if [ -f driver.pid ]; then
-            # driver.js listens for DURATION_SECONDS internally, plus a bit
-            # of its own startup/printing overhead -- wait at least that
-            # long, not a fixed guess, or a long DURATION_SECONDS would get
-            # cut off here before driver.js ever exits on its own.
-            for i in $(seq 1 $((DURATION_SECONDS + 15))); do
-              kill -0 "$(cat driver.pid)" 2>/dev/null || break
+          if [ -f client.pid ]; then
+            # client.js listens for DURATION_SECONDS internally, plus its own
+            # build/startup/printing overhead -- wait generously, not a fixed
+            # guess, or a long build or DURATION_SECONDS would get cut off
+            # here before client.js ever exits on its own.
+            for i in $(seq 1 $((DURATION_SECONDS + 60))); do
+              kill -0 "$(cat client.pid)" 2>/dev/null || break
               sleep 1
             done
           fi
-          echo "=== driver.js output ==="
-          cat driver.log || true
+          echo "=== reconstructed document (client_output.txt) ==="
+          cat client_output.txt || true
+          echo "=== full client.log ==="
+          cat client.log || true
 
       - name: Shut down
         if: always()
-        working-directory: runner_test
         run: |
-          if [ -f server.pid ] && kill -0 "$(cat server.pid)" 2>/dev/null; then
-            echo "server still alive at shutdown (pid $(cat server.pid))"
-          else
-            echo "server already gone by shutdown"
-          fi
-          [ -f tail.pid ] && kill "$(cat tail.pid)" 2>/dev/null || true
-          [ -f server.pid ] && kill "$(cat server.pid)" 2>/dev/null || true
-          [ -f ../driver.pid ] && kill "$(cat ../driver.pid)" 2>/dev/null || true
-          echo "=== full server.log ==="
-          cat server.log || true
+          [ -f client.pid ] && kill "$(cat client.pid)" 2>/dev/null || true

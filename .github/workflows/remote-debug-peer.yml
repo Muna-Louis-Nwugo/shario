@@ -111,6 +111,10 @@ jobs:
             free -h || true
             echo "=== dmesg (oom/kill evidence) ==="
             (sudo dmesg --ctime 2>/dev/null || dmesg --ctime 2>/dev/null) | grep -iE "killed process|out of memory|oom" | tail -n 40
+            echo "=== listening sockets ==="
+            ss -ltnp 2>/dev/null || netstat -ltnp 2>/dev/null || true
+            echo "=== shario process ==="
+            ps aux | grep -i shario | grep -v grep || true
             echo "=== client.log ==="
             cat client.log || true
           }

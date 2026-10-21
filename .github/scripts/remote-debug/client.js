@@ -74,6 +74,12 @@ function waitForPort(port, timeoutMs) {
   return new Promise((resolve, reject) => {
     const attempt = () => {
       const socket = net.connect(port, "127.0.0.1");
+      // a bare net.connect has no timeout of its own -- if the SYN gets
+      // silently dropped instead of refused, Linux's own retry backoff can
+      // sit for minutes with neither "connect" nor "error" ever firing,
+      // which would blow straight past timeoutMs since that's only ever
+      // checked inside the "error" handler below
+      socket.setTimeout(1000, () => socket.destroy(new Error("connect attempt timed out")));
       socket.once("connect", () => {
         socket.end();
         resolve();

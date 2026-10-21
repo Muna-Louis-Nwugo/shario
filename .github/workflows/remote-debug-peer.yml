@@ -143,42 +143,56 @@ jobs:
 
           // Reconstructs actual document text from "network-add"/"network-remove"
           // events (which carry real character values, unlike "initial-state"'s
-          // bare identity tags) -- mirrors tree.rs's own sibling tie-break rule
-          // (larger id first, smaller peer breaks a tie) so concurrent inserts
-          // land in the same order the real tree would put them in. Not meant to
-          // replace the raw [network-add]/[network-remove] logs above, just to
-          // make the actual document state readable at a glance alongside them.
-          const nodes = new Map(); // key -> { value, parentId, parentPeer, deleted }
-          const childrenByParent = new Map(); // key -> [{ id, peer }]
-          const key = (id, peer) => `${id}:${peer}`;
+          // bare identity tags). Mirrors shario-vscode/extension.js's own model
+          // exactly (findByIdentity + applyNetworkAdd/applyNetworkRemove): the
+          // server already resolves sibling tie-break itself and sends the real
+          // immediate predecessor as relation.parent_id/parent_peer, so this
+          // just inserts right after whatever identity it's given -- no
+          // tie-break logic needed here either. Not meant to replace the raw
+          // [network-add]/[network-remove] logs above, just to make the actual
+          // document state readable at a glance alongside them.
+          const lines = [{ anchor: { id: 0, peer: 0 }, cells: [] }];
 
-          function addNode(id, peer, value, parentId, parentPeer) {
-            const k = key(id, peer);
-            if (nodes.has(k)) return; // already known, e.g. a duplicate catch-up delivery
-            nodes.set(k, { value, parentId, parentPeer, deleted: false });
-            const parentKey = key(parentId, parentPeer);
-            if (!childrenByParent.has(parentKey)) childrenByParent.set(parentKey, []);
-            childrenByParent.get(parentKey).push({ id, peer });
+          function findByIdentity(id, peer) {
+            for (let row = 0; row < lines.length; row++) {
+              const line = lines[row];
+              if (line.anchor.id === id && line.anchor.peer === peer) {
+                return { kind: "anchor", row };
+              }
+              for (let col = 0; col < line.cells.length; col++) {
+                if (line.cells[col].id === id && line.cells[col].peer === peer) {
+                  return { kind: "cell", row, col };
+                }
+              }
+            }
+            return null;
           }
 
-          function removeNode(id, peer) {
-            const node = nodes.get(key(id, peer));
-            if (node) node.deleted = true;
+          function applyNetworkAdd(data) {
+            const { id, peer, relation } = data.crdt;
+            const parentPos = findByIdentity(relation.parent_id, relation.parent_peer);
+            if (!parentPos) return;
+
+            const insertIdx = parentPos.kind === "anchor" ? 0 : parentPos.col + 1;
+
+            if (relation.value === "\n") {
+              const line = lines[parentPos.row];
+              const moved = line.cells.splice(insertIdx);
+              lines.splice(parentPos.row + 1, 0, { anchor: { id, peer }, cells: moved });
+              return;
+            }
+
+            lines[parentPos.row].cells.splice(insertIdx, 0, { value: relation.value, id, peer });
+          }
+
+          function applyNetworkRemove(data) {
+            const pos = findByIdentity(data.id, data.peer);
+            if (!pos || pos.kind !== "cell") return;
+            lines[pos.row].cells.splice(pos.col, 1);
           }
 
           function reconstructText() {
-            let out = "";
-            function walk(parentId, parentPeer) {
-              const children = (childrenByParent.get(key(parentId, parentPeer)) || []).slice();
-              children.sort((a, b) => (a.id !== b.id ? b.id - a.id : a.peer - b.peer));
-              for (const { id, peer } of children) {
-                const node = nodes.get(key(id, peer));
-                if (!node.deleted) out += node.value;
-                walk(id, peer);
-              }
-            }
-            walk(0, 0);
-            return out;
+            return lines.map((line) => line.cells.map((cell) => cell.value).join("")).join("\n");
           }
 
           let lastParentId = null;
@@ -237,13 +251,12 @@ jobs:
           socket.on("ide-add-failed", (data) => console.log("[ide-add-failed]", JSON.stringify(data)));
           socket.on("network-add", (data) => {
             console.log("[network-add]", JSON.stringify(data));
-            const { id, peer, relation } = data.crdt;
-            addNode(id, peer, relation.value, relation.parent_id, relation.parent_peer);
+            applyNetworkAdd(data);
             console.log("[document]", JSON.stringify(reconstructText()));
           });
           socket.on("network-remove", (data) => {
             console.log("[network-remove]", JSON.stringify(data));
-            removeNode(data.id, data.peer);
+            applyNetworkRemove(data);
             console.log("[document]", JSON.stringify(reconstructText()));
           });
 

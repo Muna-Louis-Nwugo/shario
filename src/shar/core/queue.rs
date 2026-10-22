@@ -132,9 +132,9 @@ impl SharQueue {
         Ok(queue)
     }
 
-    /// Every file's `(id, peer)` projection, keyed by its full path. See
-    /// [`SharDirectory::identities`].
-    pub fn identities(&self) -> Vec<(PathBuf, Vec<Vec<(IdSize, PeerIdSize)>>)> {
+    /// Every file's `(id, peer, value)` projection, keyed by its full path.
+    /// See [`SharDirectory::identities`].
+    pub fn identities(&self) -> Vec<(PathBuf, Vec<Vec<(IdSize, PeerIdSize, char)>>)> {
         self.tree.identities()
     }
 

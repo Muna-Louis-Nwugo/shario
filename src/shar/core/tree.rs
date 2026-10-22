@@ -550,6 +550,21 @@ impl SharFile {
 
         self_copy
     }
+
+    /// Same shape as `projection`, but with each identity's real character
+    /// alongside it -- lets a freshly-joined IDE build its document from
+    /// scratch instead of needing to already have correct pre-existing
+    /// content of its own to label.
+    pub fn identities_with_values(&self) -> Vec<Vec<(IdSize, PeerIdSize, char)>> {
+        self.projection
+            .iter()
+            .map(|line| {
+                line.iter()
+                    .map(|&(id, peer)| (id, peer, self.characters[&(id, peer)].value))
+                    .collect()
+            })
+            .collect()
+    }
 }
 
 impl<'a> fmt::Display for SharFile {
@@ -682,14 +697,15 @@ impl SharDirectory {
         }
     }
 
-    /// Every file's `(id, peer)` projection, keyed by its full path. Lets a
-    /// freshly-joined IDE learn identities for content it didn't type
-    /// itself.
-    pub fn identities(&self) -> Vec<(PathBuf, Vec<Vec<(IdSize, PeerIdSize)>>)> {
-        let mut out: Vec<(PathBuf, Vec<Vec<(IdSize, PeerIdSize)>>)> = self
+    /// Every file's `(id, peer, value)` projection, keyed by its full path.
+    /// Carries real values, not just identities, so a freshly-joined IDE can
+    /// build its document straight from this instead of needing its own
+    /// pre-existing content to already match the session's real state.
+    pub fn identities(&self) -> Vec<(PathBuf, Vec<Vec<(IdSize, PeerIdSize, char)>>)> {
+        let mut out: Vec<(PathBuf, Vec<Vec<(IdSize, PeerIdSize, char)>>)> = self
             .sub_files
             .iter()
-            .map(|file| (file.file_path.clone(), file.projection.clone()))
+            .map(|file| (file.file_path.clone(), file.identities_with_values()))
             .collect();
 
         for dir in &self.sub_dir {

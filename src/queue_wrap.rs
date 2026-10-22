@@ -114,7 +114,7 @@ impl QueueWrap {
         }
     }
 
-    pub async fn identities(&self) -> Vec<(PathBuf, Vec<Vec<(IdSize, PeerIdSize)>>)> {
+    pub async fn identities(&self) -> Vec<(PathBuf, Vec<Vec<(IdSize, PeerIdSize, char)>>)> {
         let queue = self.queue.read().await;
         queue.identities()
     }

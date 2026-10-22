@@ -391,8 +391,9 @@ async fn on_connect(producer: Sender<NetworkOp>, queue: QueueWrap, socket: Socke
                 tracing::error!(socket_id = %socket.id, error = %e, "failed to initialize queue");
             }
 
-            // tells the joining IDE the real (id, peer) behind every
-            // character it didn't type itself -- see extension.js's
+            // tells the joining IDE the real (id, peer, value) behind every
+            // character -- including ones it didn't type itself and may
+            // have no correct local copy of at all -- see extension.js's
             // "initial-state" handler
             for (file_path, lines) in join_queue.identities().await {
                 let _ = socket

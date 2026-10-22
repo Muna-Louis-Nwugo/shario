@@ -151,7 +151,19 @@ jobs:
           // tie-break logic needed here either. Not meant to replace the raw
           // [network-add]/[network-remove] logs above, just to make the actual
           // document state readable at a glance alongside them.
-          const lines = [{ anchor: { id: 0, peer: 0 }, cells: [] }];
+          //
+          // "initial-state" carries real values now, not just identities
+          // (see shario-vscode/extension.js's own file-level comment on
+          // why) -- this script never had a local file to trust anyway, so
+          // it always scraps and rebuilds from this directly.
+          let lines = [{ anchor: { id: 0, peer: 0 }, cells: [] }];
+
+          function buildInitialState(serverLines) {
+            return serverLines.map(([anchorInfo, ...cellInfos]) => ({
+              anchor: { id: anchorInfo[0], peer: anchorInfo[1] },
+              cells: cellInfos.map(([id, peer, value]) => ({ value, id, peer })),
+            }));
+          }
 
           function findByIdentity(id, peer) {
             for (let row = 0; row < lines.length; row++) {
@@ -231,6 +243,9 @@ jobs:
           socket.on("initial-state", (data) => {
             if (data.file_path !== FILE) return;
             console.log("[initial-state]", JSON.stringify(data.lines));
+            lines = buildInitialState(data.lines);
+            console.log("[document]", JSON.stringify(reconstructText()));
+
             const lastLine = data.lines[data.lines.length - 1];
             const lastEntry = lastLine[lastLine.length - 1];
             [lastParentId, lastParentPeer] = lastEntry;

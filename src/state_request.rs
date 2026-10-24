@@ -28,6 +28,7 @@ use iroh::protocol::{AcceptError, ProtocolHandler};
 use iroh::{Endpoint, EndpointAddr};
 
 use crate::queue_wrap::QueueWrap;
+use crate::shar::error::Error;
 use crate::shar::prelude::{CRDT, IdSize, PeerIdSize};
 use crate::types::{CrdtRelation, NetworkAdd, NetworkOp, Remove};
 
@@ -136,12 +137,21 @@ impl ProtocolHandler for StateRequestHandler {
 /// order they arrive. Safe to call this for more than one peer and apply
 /// all of their responses -- both paths are idempotent, so overlapping ops
 /// from multiple peers just no-op on the repeats.
-pub async fn request_state(endpoint: &Endpoint, peer: EndpointAddr, queue: &QueueWrap) {
+///
+/// Returns `Err` for anything that goes wrong with the connection/stream
+/// itself (connect, open, read, decode) -- a caller trying this against
+/// several peers needs to know a given attempt genuinely failed, rather
+/// than silently treating it the same as a real, fully-applied catch-up.
+pub async fn request_state(
+    endpoint: &Endpoint,
+    peer: EndpointAddr,
+    queue: &QueueWrap,
+) -> Result<(), Error> {
     let connection = match endpoint.connect(peer, STATE_REQUEST_ALPN).await {
         Ok(c) => c,
         Err(e) => {
             tracing::warn!(error = %e, "state request: couldn't connect to peer");
-            return;
+            return Err(Error::Generic(format!("couldn't connect to peer: {e}")));
         }
     };
     tracing::info!(peer = ?connection.remote_id(), "state request: connected to peer");
@@ -150,7 +160,7 @@ pub async fn request_state(endpoint: &Endpoint, peer: EndpointAddr, queue: &Queu
         Ok(streams) => streams,
         Err(e) => {
             tracing::warn!(error = %e, "state request: couldn't open stream");
-            return;
+            return Err(Error::Generic(format!("couldn't open stream: {e}")));
         }
     };
 
@@ -160,7 +170,7 @@ pub async fn request_state(endpoint: &Endpoint, peer: EndpointAddr, queue: &Queu
     let mut len_buf = [0u8; 8];
     if let Err(e) = recv.read_exact(&mut len_buf).await {
         tracing::warn!(error = %e, "state request: couldn't read length prefix");
-        return;
+        return Err(Error::Generic(format!("couldn't read length prefix: {e}")));
     }
     let declared_len = u64::from_be_bytes(len_buf);
 
@@ -170,20 +180,22 @@ pub async fn request_state(endpoint: &Endpoint, peer: EndpointAddr, queue: &Queu
             max = MAX_STATE_BYTES,
             "state request: peer claimed an unreasonably large state, aborting"
         );
-        return;
+        return Err(Error::Generic(format!(
+            "peer claimed an unreasonably large state ({declared_len} bytes)"
+        )));
     }
 
     let mut bytes = vec![0u8; declared_len as usize];
     if let Err(e) = recv.read_exact(&mut bytes).await {
         tracing::warn!(error = %e, "state request: couldn't read state payload");
-        return;
+        return Err(Error::Generic(format!("couldn't read state payload: {e}")));
     }
 
     let state: Vec<NetworkOp> = match serde_json::from_slice(&bytes) {
         Ok(decoded) => decoded,
         Err(e) => {
             tracing::warn!(error = %e, "state request: couldn't decode response");
-            return;
+            return Err(Error::Generic(format!("couldn't decode response: {e}")));
         }
     };
     tracing::info!(ops = state.len(), "state_received");
@@ -195,4 +207,6 @@ pub async fn request_state(endpoint: &Endpoint, peer: EndpointAddr, queue: &Queu
             NetworkOp::REMOVE(op) => queue.remove_network_operation(op).await,
         }
     }
+
+    Ok(())
 }

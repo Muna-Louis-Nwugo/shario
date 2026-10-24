@@ -2,8 +2,8 @@
 // the real shario binary, spawns it, waits for it to come up, then connects
 // as a local IDE using the REAL shario-vscode/extension.js (via
 // fake-vscode.js, a minimal stand-in for the VS Code API) -- not a second,
-// independent reimplementation of its identity/tie-break logic that could
-// have its own, different bugs. extension.js itself is never modified.
+// independent reimplementation of its identity logic that could have its
+// own, different bugs. extension.js itself is never modified.
 //
 // Owning the whole lifecycle itself (build -> spawn -> wait -> connect) in
 // one script, rather than splitting it across separate workflow steps,

@@ -67,6 +67,8 @@ The server is the process that owns one `SharQueue` for a directory and exposes 
 
 A plugin never computes identities itself. It only ever invents a disposable local `tag` the instant something is typed, as a placeholder until the server's response swaps it for a real identity. This is what lets someone type a fast burst of characters without waiting for a round trip after every single one: the next character just references the previous one by its tag, and the server sorts out the real identities once everything catches up. An insert references its parent the same way the server does internally: by real identity if it's already confirmed, or by tag if it's this same connection's own not-yet-confirmed character. Deletes work the same way, held locally until their target has a real identity.
 
+A plugin never resolves sibling tie-break either. The server already knows exactly where a character landed the moment it inserts it, so an edit arriving from the network names the real character immediately before it in rendered order, not just its raw structural parent (which could be several tie-broken siblings earlier). A plugin just inserts after whatever identity it's given -- there's nothing left to compute or get wrong.
+
 Content already on disk before the plugin connects gets matched up with the server's identities once, right after connecting, by position, safe only because nothing's been edited in between.
 
 The full contract (and what a plugin for a different editor would need to implement) is [`PLUGIN_SPECIFICATIONS.md`](PLUGIN_SPECIFICATIONS.md).
@@ -102,4 +104,5 @@ Known limitation: two peers updating the same session's entry at nearly the same
 **Still open:**
 - The database race described above.
 - A shar's state doesn't persist across a restart, and editing its files with something other than the shar itself can silently corrupt or lose history. See [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md).
+- Two peers joining the same session from genuinely different starting documents can silently drop, misattach, or delete content. Both sides' pre-existing content gets the same small sequential ids independently, so they collide by coincidence rather than merging. See [`KNOWN_ISSUES.md`](KNOWN_ISSUES.md)/[`TODO.md`](TODO.md).
 - `find_crdt`'s search cost under a fast burst of edits: a performance issue, not a correctness one. See [`TODO.md`](TODO.md)/[`KNOWN_ISSUES.md`](KNOWN_ISSUES.md).

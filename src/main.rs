@@ -124,7 +124,7 @@ async fn main() -> io::Result<()> {
         return Ok(());
     }
 
-    // talks to the session-discovery proxy
+    // talks to the session-discovery Cloudflare worker proxy
     let http_client = reqwest::Client::new();
 
     // THESE NEXT TWO ARE FOR IROH, I'M INITIALIZING THEM HERE SO I CAN USE THEM IN DISCOVERY
@@ -192,6 +192,7 @@ async fn main() -> io::Result<()> {
                 if lookup_resp.status() == reqwest::StatusCode::NOT_FOUND {
                     panic!("This shar name doesn't exist");
                 }
+
                 let ticket_bytes = lookup_resp
                     .bytes()
                     .await
@@ -271,9 +272,17 @@ async fn main() -> io::Result<()> {
             let random_peer = discovery_peers.remove(0);
 
             // hydration
-            request_state(&endpoint, random_peer.into(), &shared_queue_discovery).await;
-
-            num_discovery_peers -= 1;
+            match request_state(&endpoint, random_peer.into(), &shared_queue_discovery).await {
+                Ok(()) => {
+                    num_discovery_peers -= 1;
+                }
+                Err(_) => {
+                    // a failed attempt doesn't count toward the target --
+                    // try a different peer instead, but clamp the target
+                    // down too, in case the pool has shrunk below it
+                    num_discovery_peers = cmp::min(num_discovery_peers, discovery_peers.len());
+                }
+            }
         }
 
         let (sender, receiver) = GossipTopic::split(
@@ -349,7 +358,9 @@ async fn iroh_gossip_subscriber(
 
                 Event::NeighborUp(key) => {
                     // hydrate this shar's state with whatever the new peer has
-                    request_state(&endpoint, key.into(), &queue).await;
+                    if let Err(e) = request_state(&endpoint, key.into(), &queue).await {
+                        tracing::warn!(error = %e, "state request: hydration from new neighbor failed");
+                    }
                 }
                 _ => {}
             },

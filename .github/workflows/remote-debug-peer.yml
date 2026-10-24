@@ -144,13 +144,10 @@ jobs:
           // Reconstructs actual document text from "network-add"/"network-remove"
           // events (which carry real character values, unlike "initial-state"'s
           // bare identity tags). Mirrors shario-vscode/extension.js's own model
-          // exactly (findByIdentity + applyNetworkAdd/applyNetworkRemove): the
-          // server already resolves sibling tie-break itself and sends the real
-          // immediate predecessor as relation.parent_id/parent_peer, so this
-          // just inserts right after whatever identity it's given -- no
-          // tie-break logic needed here either. Not meant to replace the raw
-          // [network-add]/[network-remove] logs above, just to make the actual
-          // document state readable at a glance alongside them.
+          // exactly (findByIdentity + applyNetworkAdd/applyNetworkRemove). Not
+          // meant to replace the raw [network-add]/[network-remove] logs above,
+          // just to make the actual document state readable at a glance
+          // alongside them.
           //
           // "initial-state" carries real values now, not just identities
           // (see shario-vscode/extension.js's own file-level comment on

@@ -179,6 +179,7 @@ jobs:
 
           function applyNetworkAdd(data) {
             const { id, peer, relation } = data.crdt;
+            if (findByIdentity(id, peer)) return; // idempotent, same as add_crdt server-side
             const parentPos = findByIdentity(relation.parent_id, relation.parent_peer);
             if (!parentPos) return;
 

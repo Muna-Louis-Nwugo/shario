@@ -85,6 +85,10 @@ thread_local! {
     static REMOVE_CALLS: RefCell<Vec<Remove>> = RefCell::new(Vec::new());
     static IDE_ADD_CONFIRM_CALLS: RefCell<Vec<(u32, IdSize, PeerIdSize)>> = RefCell::new(Vec::new());
     static IDE_ADD_BROADCAST_CALLS: RefCell<Vec<NetworkAdd>> = RefCell::new(Vec::new());
+    // the IDE-facing copy of a local add -- parent_id/parent_peer rewritten to
+    // the real predecessor, unlike the broadcast copy above which keeps the
+    // true structural parent. See ide_add_callback/add_ide_operation_inner.
+    static IDE_ADD_LOCAL_CALLS: RefCell<Vec<NetworkAdd>> = RefCell::new(Vec::new());
     static IDE_REMOVE_CALLS: RefCell<Vec<Remove>> = RefCell::new(Vec::new());
 }
 
@@ -93,6 +97,7 @@ fn reset_calls() {
     REMOVE_CALLS.with(|c| c.borrow_mut().clear());
     IDE_ADD_CONFIRM_CALLS.with(|c| c.borrow_mut().clear());
     IDE_ADD_BROADCAST_CALLS.with(|c| c.borrow_mut().clear());
+    IDE_ADD_LOCAL_CALLS.with(|c| c.borrow_mut().clear());
     IDE_REMOVE_CALLS.with(|c| c.borrow_mut().clear());
 }
 
@@ -108,8 +113,9 @@ async fn record_ide_add_confirm(confirmed: IdeAddConfirmed) {
     IDE_ADD_CONFIRM_CALLS.with(|c| c.borrow_mut().push((confirmed.tag, confirmed.id, confirmed.peer)));
 }
 
-async fn record_ide_add(op: NetworkAdd) {
-    IDE_ADD_BROADCAST_CALLS.with(|c| c.borrow_mut().push(op));
+async fn record_ide_add(op_broadcast: NetworkAdd, op_local: NetworkAdd) {
+    IDE_ADD_BROADCAST_CALLS.with(|c| c.borrow_mut().push(op_broadcast));
+    IDE_ADD_LOCAL_CALLS.with(|c| c.borrow_mut().push(op_local));
 }
 
 async fn record_ide_remove(op: Remove) {
@@ -132,6 +138,10 @@ fn ide_add_broadcast_calls() -> Vec<NetworkAdd> {
     IDE_ADD_BROADCAST_CALLS.with(|c| c.borrow().clone())
 }
 
+fn ide_add_local_calls() -> Vec<NetworkAdd> {
+    IDE_ADD_LOCAL_CALLS.with(|c| c.borrow().clone())
+}
+
 fn ide_remove_calls() -> Vec<Remove> {
     IDE_REMOVE_CALLS.with(|c| c.borrow().clone())
 }
@@ -151,7 +161,7 @@ fn setup(dir_name: &str, content: &str) -> (SharQueue, PathBuf) {
         Box::new(|op| Box::pin(record_add(op))),
         Box::new(|op| Box::pin(record_remove(op))),
         Box::new(|confirmed| Box::pin(record_ide_add_confirm(confirmed))),
-        Box::new(|op| Box::pin(record_ide_add(op))),
+        Box::new(|op, op_local| Box::pin(record_ide_add(op, op_local))),
         Box::new(|op| Box::pin(record_ide_remove(op))),
     )
     .expect("failed to load queue");
@@ -162,6 +172,52 @@ fn teardown(dir_name: &str) {
     let dir_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(dir_name);
     std::fs::remove_file(dir_path.join("f.txt")).expect("failed to delete scratch file");
     std::fs::remove_dir(&dir_path).expect("failed to delete scratch dir");
+}
+
+#[tokio::test]
+async fn ide_add_local_copy_always_matches_true_parent_due_to_counter_ratchet() {
+    // Documents a subtle invariant: a local add's id is always `counter + 1`
+    // at the moment the server actually processes it, which is always
+    // larger than anything this replica has already incorporated so far
+    // (local or network) -- so a local add can never lose the tie-break
+    // against an existing sibling on its own origin server. That means the
+    // local-facing predecessor rewrite in queue.rs always computes the same
+    // value as the true declared parent for a LOCAL add specifically
+    // (unlike for network ops, where it genuinely can differ -- see the
+    // mock-ide-client tie-break test). The fix still matters client-side:
+    // extension.js re-verifies the IDE's own rendered position against this
+    // identity's *current* position and self-corrects if something else
+    // (like the 'R' below, from another peer) got spliced in between.
+    let (mut queue, file_path) = setup("scratch_queue_local_matches_true_parent", "");
+
+    // network sibling with a deliberately huge id, landing as the
+    // sentinel's first child
+    let sibling = NetworkAdd::new(
+        file_path.clone(),
+        CRDT::new(500, 1, CrdtRelation::new('R', 0, 0)),
+        0,
+    );
+    queue.add_network_operation(sibling).await;
+
+    // local add parented on the sentinel too -- its id (counter + 1) is
+    // guaranteed larger than 500, so it wins and lands before R
+    queue
+        .add_ide_operation(IdeAdd::new(file_path, Some(0), Some(0), None, 'L', 1, 0))
+        .await
+        .expect("failed to add locally");
+
+    let broadcast = ide_add_broadcast_calls();
+    let local = ide_add_local_calls();
+    assert_eq!(broadcast.len(), 1);
+    assert_eq!(local.len(), 1);
+    assert_eq!(
+        (local[0].crdt.relation.parent_id, local[0].crdt.relation.parent_peer),
+        (broadcast[0].crdt.relation.parent_id, broadcast[0].crdt.relation.parent_peer),
+        "a local add's id always wins tie-break against anything already known to its own \
+         origin server, so its predecessor always equals its true declared parent"
+    );
+
+    teardown("scratch_queue_local_matches_true_parent");
 }
 
 #[tokio::test]

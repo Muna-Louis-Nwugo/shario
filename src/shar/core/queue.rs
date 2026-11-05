@@ -61,7 +61,7 @@ pub struct SharQueue {
     pub ide_add_confirm_callback: Option<Box<dyn Fn(IdeAddConfirmed) -> BoxedFun + Send + Sync>>,
     /// Called once an IDE add is actually inserted into the tree, to
     /// broadcast it to other peers.
-    pub ide_add_callback: Option<Box<dyn Fn(NetworkAdd) -> BoxedFun + Send + Sync>>,
+    pub ide_add_callback: Option<Box<dyn Fn(NetworkAdd, NetworkAdd) -> BoxedFun + Send + Sync>>,
     pub ide_remove_callback: Option<Box<dyn Fn(Remove) -> BoxedFun + Send + Sync>>,
 }
 
@@ -106,7 +106,7 @@ impl SharQueue {
         network_add_callback: Box<dyn Fn(NetworkAdd) -> BoxedFun + Send + Sync>,
         network_remove_callback: Box<dyn Fn(Remove) -> BoxedFun + Send + Sync>,
         ide_add_confirm_callback: Box<dyn Fn(IdeAddConfirmed) -> BoxedFun + Send + Sync>,
-        ide_add_callback: Box<dyn Fn(NetworkAdd) -> BoxedFun + Send + Sync>,
+        ide_add_callback: Box<dyn Fn(NetworkAdd, NetworkAdd) -> BoxedFun + Send + Sync>,
         ide_remove_callback: Box<dyn Fn(Remove) -> BoxedFun + Send + Sync>,
     ) -> Result<Self> {
         let mut counter: u32 = 0;
@@ -261,7 +261,25 @@ impl SharQueue {
                 }
                 let network_op =
                     NetworkAdd::new(self.to_relative_path(&op.file_path), crdt.clone(), pos.0);
-                (self.ide_add_callback.as_ref().unwrap())(network_op).await;
+
+                // the IDE already rendered its own character the instant it was
+                // typed, using whatever it assumed was the predecessor at the
+                // time -- a concurrent remote sibling can have landed in between
+                // by the time this actually resolves. Give the IDE the real,
+                // just-resolved predecessor (same rewrite network-add already
+                // gets) so it can reposition its own character if it's not
+                // already sitting right after it. Outgoing-to-peers (network_op,
+                // above) keeps the true structural parent -- only the local copy
+                // changes.
+                let mut local_op = network_op.clone();
+                if let Ok(Some((pred_id, pred_peer))) =
+                    self.tree.predecessor_identity(&op.file_path, pos)
+                {
+                    local_op.crdt.relation.parent_id = pred_id;
+                    local_op.crdt.relation.parent_peer = pred_peer;
+                }
+
+                (self.ide_add_callback.as_ref().unwrap())(network_op, local_op).await;
                 Ok(())
             }
             Ok(None) => {

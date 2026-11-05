@@ -38,6 +38,7 @@ impl QueueWrap {
         let socket1 = socket.clone();
         let socket2 = socket.clone();
         let socket3 = socket.clone();
+        let socket4 = socket.clone();
         let tx1 = tx.clone();
         let tx2 = tx.clone();
 
@@ -49,7 +50,14 @@ impl QueueWrap {
             Box::new(move |op_return| {
                 Box::pin(ide_add_confirm_callback(socket3.clone(), op_return))
             }),
-            Box::new(move |op_broadcast| Box::pin(ide_add_callback(tx1.clone(), op_broadcast))),
+            Box::new(move |op_broadcast, op_local| {
+                Box::pin(ide_add_callback(
+                    tx1.clone(),
+                    socket4.clone(),
+                    op_broadcast,
+                    op_local,
+                ))
+            }),
             Box::new(move |remove| Box::pin(ide_remove_callback(tx2.clone(), remove))),
         )?;
         tracing::info!("new: about to acquire queue write lock");

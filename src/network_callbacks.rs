@@ -38,9 +38,30 @@ pub async fn ide_remove_callback(producer: Sender<NetworkOp>, op: Remove) {
     producer.send(NetworkOp::REMOVE(op)).await.expect("Inside ide_remove_callback, for some reason the consumer of this producer has stopped listening");
 }
 
-pub async fn ide_add_callback(producer: Sender<NetworkOp>, op_broadcast: NetworkAdd) {
+pub async fn ide_add_callback(
+    producer: Sender<NetworkOp>,
+    socket: SocketRef,
+    op_broadcast: NetworkAdd,
+    op_local: NetworkAdd,
+) {
     tracing::debug!(?op_broadcast, "add applied");
-    producer.send(NetworkOp::ADD(op_broadcast)).await.expect("Inside ide_add_callback, for some reason the consumer of this producer has stopped listening");
+    // send to the iroh manager
+    producer.send(NetworkOp::ADD(op_broadcast.clone())).await.expect("Inside ide_add_callback, for some reason the consumer of this producer has stopped listening");
+    tracing::debug!(?op_broadcast, "ide-add-complete");
+    // inform the ide
+    loop {
+        match socket
+            .within("local")
+            .emit("ide-add-complete", &op_local)
+            .await
+        {
+            Ok(_) => break,
+            Err(e) => {
+                tracing::warn!(?op_local, error = %e, "ide-add-confirmed emit failed, retrying");
+                tokio::time::sleep(std::time::Duration::from_micros(1)).await;
+            }
+        }
+    }
 }
 
 pub async fn ide_add_confirm_callback(socket: SocketRef, op_return: IdeAddConfirmed) {

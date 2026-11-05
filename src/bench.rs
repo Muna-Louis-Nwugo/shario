@@ -196,7 +196,7 @@ pub async fn run(trace_path: &Path, label: &str) -> Result<(), Box<dyn std::erro
                 *confirmed.lock().unwrap() = Some((op_return.id, op_return.peer));
             })
         }),
-        Box::new(|_op| Box::pin(async {})),
+        Box::new(|_op, _op_local| Box::pin(async {})),
         Box::new(|_op| Box::pin(async {})),
     )?;
 

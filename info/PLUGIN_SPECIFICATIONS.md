@@ -2,7 +2,7 @@
 
 The contract between a `shar` server and an IDE plugin. If you're building a new plugin (for an editor other than VS Code) to join the shario ecosystem, this is the spec to implement against — the server doesn't care what editor is on the other end, only that it speaks this protocol correctly. [`shario-vscode`'s](https://github.com/Muna-Louis-Nwugo/shario-vscode) `extension.js` is the reference implementation; when in doubt, that's the working example.
 
-This document covers the **IDE side of the protocol only** (`"local"` room). It does not cover peer-to-peer network sync (`"network"` room) — that's a separate, not-yet-built contract for server-to-server communication, not something a plugin needs to implement.
+This document covers the **IDE side of the protocol only** (events sent to/received from the `"local"` room). Peer-to-peer network sync (the `"network"` room, gossip, hydration) is a separate, already-built contract for server-to-server communication — a plugin never participates in it directly, and doesn't need to know how it works. What a plugin *does* need to handle is the result of that sync arriving locally, which shows up as the same `network-add`/`network-remove` events covered below, regardless of whether the edit originated from another peer's machine or just hadn't finished applying locally yet.
 
 ## Obtaining the binary
 
@@ -59,14 +59,14 @@ Right after joining, the server sends `initial-state` once per file it holds, un
     // one array per line; index 0 of each is that line's own anchor
     // (the root sentinel for line 0, the newline that created every other
     // line); every entry after that is one real character, in order.
-    // each entry is a raw [id, peer] pair.
-    [[0, 0]],
-    [[5, 1], [6, 1], [7, 1]]
+    // each entry is a raw [id, peer, value] triple.
+    [[0, 0, "\u0000"]],
+    [[5, 1, "H"], [6, 1, "i"], [7, 1, "!"]]
   ]
 }
 ```
 
-**A plugin must use this to bootstrap identities for pre-existing content** — anything already on disk before the plugin connected has no identity of its own until matched against this snapshot, by position. This match is only safe because nothing has been edited between the plugin reading the file off disk and the server loading the same bytes — do this before allowing any edits to a file.
+**A plugin must use this to bootstrap identities for pre-existing content.** The real character values are included specifically so a plugin *could* build its document from this alone — but the reference implementation (`shario-vscode`) instead trusts whatever's already open in the editor for its values, and only uses this snapshot to fill in each existing character's real `(id, peer)` by matching position. **That position-match is only safe when the plugin's local content actually matches what the server just loaded** — true for a freshly-created session, or for reattaching to a server the same plugin instance just started, but **not guaranteed when joining an existing session from a separately-maintained copy of the files.** Two peers joining the same session with genuinely different starting content for the same file is a known, unresolved gap (see the shar repo's `info/KNOWN_ISSUES.md`) — it doesn't get rejected or flagged today, it silently produces a wrong result. A more careful plugin could instead trust the values in this payload directly rather than its own on-disk copy, sidestepping that risk at the cost of not being able to show real content until this event arrives.
 
 ## Sending an insert: `ide-add`
 
@@ -103,6 +103,29 @@ Sent to every plugin in the `"local"` room once per `ide-add` received, always, 
 2. Record its real `(id, peer)` in its own local mirror, replacing the tag.
 3. If a `remove` for that same character was already requested locally but deferred (see below), send it now, using the identity just received.
 
+## Receiving a late correction: `ide-add-complete`
+
+```jsonc
+{
+  "file_path": "<absolute path>",
+  "crdt": {
+    "id": 118,
+    "peer": 1,
+    "relation": { "value": "x", "parent_id": 5, "parent_peer": 1, "deleted": false }
+  },
+  "row": 3
+}
+```
+
+Sent once per `ide-add`, *after* `ide-add-confirmed` — once the character has actually been placed into the server's tree, which can be later than confirmation if its parent hadn't resolved yet. Correlate by `(id, peer)` (the character's real identity, not the long-gone `tag`).
+
+The reason this exists: `relation.parent_id`/`parent_peer` here is the character's **real, final immediate predecessor in rendered order** — not necessarily the same parent the plugin originally sent in its `ide-add`. A plugin renders its own typed characters instantly, before any round trip, using whatever it assumed was correct at the time. If a concurrent edit from elsewhere lands in between before this event arrives, that assumption is now wrong, and nothing else will ever correct it. On receiving this, a plugin must:
+1. Find its own already-rendered position for this `(id, peer)`.
+2. Find the named predecessor's *current* position in its own local mirror.
+3. If its own character isn't already sitting immediately after that predecessor, move it there — remove it from wherever it currently is and reinsert it after the predecessor, using the exact same logic as handling an incoming `network-add` below (this is deliberately the same shape of operation).
+
+If either identity can't be found, skip silently — the same "don't guess" rule as everywhere else in this protocol. See the shar repo's `info/KNOWN_ISSUES.md` ("A local edit racing an already-reported remote sibling...") for the full trace of why this step is necessary.
+
 ## Sending a delete: `remove`
 
 ```jsonc
@@ -114,17 +137,44 @@ Sent to every plugin in the `"local"` room once per `ide-add` received, always, 
 
 To remove a line's own anchor (merging it into the line above), send the same event targeting that anchor's identity — there's no separate "remove whole line" event.
 
+## Receiving a remote edit: `network-add` / `network-remove`
+
+```jsonc
+// network-add
+{
+  "file_path": "<absolute path>",
+  "crdt": {
+    "id": 203,
+    "peer": 4,
+    "relation": { "value": "y", "parent_id": 118, "parent_peer": 1, "deleted": false }
+  },
+  "row": 3
+}
+
+// network-remove
+{ "file_path": "<absolute path>", "id": 203, "peer": 4, "row": 3 }
+```
+
+Sent to every plugin in the `"local"` room for any add/remove it didn't itself originate — another peer's edit arriving over the network, or this server's own catch-up of session history it just learned about. Both look identical to a plugin regardless of which one it actually was; there's no way to tell, and no need to.
+
+**`relation.parent_id`/`parent_peer` on a `network-add` is always the real, already-resolved immediate predecessor in rendered order — never a raw CRDT-structural parent that still needs sibling tie-break applied to it.** This is the single most important property in this whole protocol for a plugin author: **a plugin never implements tie-break of any kind.** All of that — deciding where a concurrent insert from two different sources actually belongs relative to each other — happens entirely server-side, in the CRDT tree, before this event is ever sent. A plugin's job is mechanical: find the named identity's *current* position in its own local mirror, and insert the new character immediately after it (or, if `relation.value` is a line-break, split a new line there — the new character becomes that line's anchor, and everything previously after the insertion point on the old line moves down onto it, the same way handling your own newline in `ide-add` does locally).
+
+A `network-remove` works the same way as `remove` in reverse: find the target identity, delete it. Removing a line's own anchor merges that line back into the one above it, same as the local case.
+
+If the named parent (for an add) or target (for a remove) can't be found at all, drop the event — don't guess, don't retry. This is most often because it was already removed; a plugin is only expected to track *live* content, never tombstones, so a stale reference like this is an expected, harmless occurrence, not an error condition.
+
 ## `ide-add-failed`
 
 Reserved in the protocol for a future case where an `ide-add` genuinely can't be applied. Not currently emitted by the server (every add either succeeds or waits harmlessly in a backlog) — a plugin should listen for it, but nothing today will trigger it.
 
 ## What a plugin is responsible for
 
-Everything above only works if the plugin maintains **its own local mirror** of the document — one line per row, each with an anchor and an ordered list of cells, each cell holding either a pending tag or a confirmed `(id, peer)` — and keeps it in lockstep with what the editor shows, purely from the plugin's own edits and `ide-add-confirmed`/`initial-state`. The server never tells a plugin "here's the current state of line 5"; it only ever confirms identities and (once network sync exists) broadcasts remote edits. Computing the right `parent_id`/`parent_peer`/`parent_tag` for every send, and correctly deferring removes of not-yet-confirmed content, is entirely the plugin's job.
+Everything above only works if the plugin maintains **its own local mirror** of the document — one line per row, each with an anchor and an ordered list of cells, each cell holding either a pending tag or a confirmed `(id, peer)` — and keeps it in lockstep with what the editor shows, from its own edits, `initial-state`, and every `ide-add-confirmed`/`ide-add-complete`/`network-add`/`network-remove` it receives. The server never tells a plugin "here's the current state of line 5"; it only ever confirms identities and reports individual adds/removes as they happen. Computing the right `parent_id`/`parent_peer`/`parent_tag` for every send, correctly deferring removes of not-yet-confirmed content, and applying every incoming event strictly one at a time (don't let two overlapping edits race against your own editor's buffer — see `shario-vscode`'s `enqueueNetworkEdit` for the reference approach) is entirely the plugin's job.
 
 ## What a plugin does *not* need to worry about
 
 - **Identity assignment of any kind** — a plugin never invents or sends an `id` or `peer` value for its own edits, only a `tag`. Both halves of a character's real identity are decided entirely server-side, in `SharQueue::add_ide_operation`, and handed back via `ide-add-confirmed`.
-- **Convergence rules** — sibling tie-break order, tombstone handling, how concurrent edits from other sources ultimately resolve into one agreed document: all of that lives in the CRDT tree (`SharFile`/`SharDirectory`), entirely server-side. A plugin never decides where something "really" belongs relative to another replica's edits; it just reports what it did and mirrors what the server confirms.
+- **Tie-break order of any kind, for anyone's edits, including its own** — a plugin never computes where a concurrent insert "really" belongs relative to another one. The shar resolves this entirely server-side and hands back the real, already-correct immediate predecessor — in `network-add` for remote-originated content, and in `ide-add-complete` for a plugin's own local content once it's actually resolved. A plugin's only job is to splice at the position it's told; see `shario-vscode`'s `applyNetworkAdd`/`findByIdentity` for the reference implementation of that splice.
+- **Tombstone handling beyond what's live** — a plugin is only expected to track live (not-yet-removed) content. A remote op naming something already removed is reported, not guessed at; dropping it is the correct response, not a bug to work around.
 - **Ordering/backlogging** — if a plugin's messages happen to get processed out of send order, or a parent hasn't resolved yet, the server holds things until they can apply correctly. A plugin never needs to retry or reorder its own sends.
-- **Network sync** — a plugin only ever talks to its own local server. Propagating edits to other machines is the server's job (once built), not the plugin's.
+- **Network sync mechanics** — a plugin only ever talks to its own local server over the `"local"` room. Propagating edits to other machines, gossip, and catch-up hydration between servers are entirely the shar's job; a plugin just receives the result as ordinary `network-add`/`network-remove` events, indistinguishable from any other.

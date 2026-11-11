@@ -452,5 +452,23 @@ async fn on_connect(producer: Sender<NetworkOp>, queue: QueueWrap, socket: Socke
 
             tracing::debug!(socket_id = %socket.id, "remove received ");
         },
-    )
+    );
+
+    // another clone
+    let queue_clone4 = queue.clone();
+    // Lets a client ask for the shar's current state on demand, outside the
+    // normal join/"initial-state" flow -- reuses the exact same identities()
+    // (id, peer, value) that "initial-state" already sends, so a debug
+    // viewer sees the shar's actual tree, not a client-side reconstruction
+    // that could itself be wrong. See shario-vscode's "Shar: Debug View".
+    socket.on("view", async move |socket: SocketRef| {
+        tracing::info!(socket_id = %socket.id, "view requested");
+        let state: Vec<_> = queue_clone4
+            .identities()
+            .await
+            .into_iter()
+            .map(|(file_path, lines)| serde_json::json!({ "file_path": file_path, "lines": lines }))
+            .collect();
+        let _ = socket.emit("view-state", &state);
+    });
 }
